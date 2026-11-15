@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F1 Replay</title>
+<style>
+  :root { color-scheme: dark; --bg: #111317; --panel: #1a1d23; --line: #2c313a; --dim: #9aa3b2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: #e8eaee; }
+  nav { display: flex; gap: 6px; padding: 8px 16px; overflow-x: auto; border-bottom: 1px solid var(--line); }
+  button, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
+  button[aria-pressed=true] { background: #e10600; border-color: #e10600; color: #fff; }
+  button:disabled { opacity: .4; cursor: default; }
+  #live { margin: 8px 16px 0; }
+  #status { margin: 0; padding: 8px 16px; color: var(--dim); min-height: 2.4em; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 16px; padding: 0 16px 24px; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 16px 0 6px; }
+  h2 small { text-transform: none; letter-spacing: 0; }
+  #head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 28px; }
+  .chip { border-radius: 4px; padding: 1px 8px; font-weight: 600; color: #000; background: #3c3; }
+  .chip.yellow { background: #fd0; } .chip.red { background: #f33; color: #fff; } .chip.sc { background: #f90; } .chip.end { background: #fff; }
+  canvas { display: block; width: 100%; background: var(--panel); border-radius: 8px; margin-top: 8px; }
+  #map { height: 56vh; min-height: 280px; }
+  #cmp { height: 120px; }
+  #cmpText { margin: 6px 0 0; }
+  #controls { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  #seek { flex: 1; min-width: 0; accent-color: #e10600; }
+  #clock { font-variant-numeric: tabular-nums; min-width: 5.5em; text-align: right; }
+  #lower { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  li button { margin-right: 6px; padding: 1px 8px; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  li time { color: var(--dim); font-variant-numeric: tabular-nums; margin-right: 6px; }
+  audio { width: 100%; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--dim); font-weight: 400; font-size: 12px; }
+  td, th { padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td.n, th.n { text-align: right; }
+  .bar { display: inline-block; width: 4px; height: 1em; vertical-align: -2px; margin-right: 6px; border-radius: 2px; }
+  .tyre { font-weight: 700; }
+</style>
+</head>
+<body>
+<nav id="years" aria-label="Season"></nav>
+<nav id="races" aria-label="Race"></nav>
+<button id="live" hidden>Live session</button>
+<p id="status" role="status"></p>
+<main id="main" hidden>
+  <div>
+    <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span></div>
+    <canvas id="map" aria-label="Track map with car positions"></canvas>
+    <div id="controls">
+      <button id="play">Play</button>
+      <select id="speed" aria-label="Playback speed">
+        <option value="0.5">0.5x</option><option value="1">1x</option><option value="5">5x</option><option value="20" selected>20x</option><option value="60">60x</option>
+      </select>
+      <input id="seek" type="range" min="0" step="1" value="0" aria-label="Race time">
+      <output id="clock"></output>
+    </div>
+    <div id="lower">
+      <section><h2>Race control</h2><ol id="rc"></ol></section>
+      <section><h2>Team radio</h2><ol id="radio"></ol><audio id="audio" controls></audio></section>
+      <section id="otBox"><h2>Overtakes</h2><ol id="ot"></ol></section>
+    </div>
+  </div>
+  <aside>
+    <h2>Timing <small id="pitloss"></small></h2>
+    <table>
+      <thead><tr><th>P</th><th>Driver</th><th class="n">Gap</th><th class="n">Int</th><th>Tyre</th><th class="n">Stops</th><th class="n" title="Position after a pit stop made right now">If pits</th></tr></thead>
+      <tbody id="tower"></tbody>
+    </table>
+    <h2>Compare two drivers <small>· gap at the start of each lap</small></h2>
+    <select id="cmpA" aria-label="First driver"></select> vs <select id="cmpB" aria-label="Second driver"></select>
+    <p id="cmpText"></p>
+    <canvas id="cmp" aria-label="Chart of the gap between the two drivers, lap by lap"></canvas>
+    <h2>Tyre wear per stint <small>· time lost per lap as the tyres age, fuel load taken out</small></h2>
+    <table><tbody id="wear"></tbody></table>
+    <div id="champ">
+      <h2>Drivers' championship (live)</h2>
+      <table><tbody id="champD"></tbody></table>
+      <h2>Constructors' championship (live)</h2>
+      <table><tbody id="champT"></tbody></table>
+    </div>
+  </aside>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
