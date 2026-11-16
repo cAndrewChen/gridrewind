@@ -139,6 +139,22 @@ createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     return res.end(`{"key":${key},"next":${lines.length},"lines":[${lines.slice(since).join(',')}]}`);
   }
+  if (url.pathname === '/radio') {
+    // F1's server does not let a web page read its radio clips, only play them. The page gets a clip
+    // through here to transcribe it. Only that one server's .mp3 files are ever fetched.
+    let clip;
+    try { clip = new URL(url.searchParams.get('u')); } catch { /* not an address: refused below */ }
+    if (clip?.origin !== 'https://livetiming.formula1.com' || !clip.pathname.startsWith('/static/') || !clip.pathname.endsWith('.mp3')) {
+      res.writeHead(400);
+      return res.end('Not a radio clip');
+    }
+    fetch(clip).then(async r => {
+      const body = Buffer.from(await r.arrayBuffer());
+      res.writeHead(r.ok ? 200 : 502, { 'content-type': 'audio/mpeg' });
+      res.end(body);
+    }).catch(() => { res.writeHead(502); res.end(); });
+    return;
+  }
   const file = FILES[url.pathname]; // fixed list: no path from the request ever reaches the disk
   if (!file) { res.writeHead(404); return res.end('Not found'); }
   res.writeHead(200, { 'content-type': `${file[1]}; charset=utf-8`, 'cache-control': 'no-store' });

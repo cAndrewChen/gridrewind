@@ -17,21 +17,29 @@ const iso = t => new Date(t).toISOString();
 const say = text => { $('status').textContent = text; };
 const byTime = (a, b) => a.t - b.t;
 
-// One request at a time: the free tier allows 3 requests/s and 30/min.
-let queue = Promise.resolve();
-function api(path) {
-  const run = async () => {
-    for (let i = 1; i <= 5; i++) {
-      const r = await fetch(API + path);
-      if (r.status === 429) { await sleep(3000 * i); continue; }
-      await sleep(350);
-      if (r.status === 404) return []; // OpenF1 answers 404 for "no rows"
-      if (!r.ok) throw new Error(`OpenF1 answered ${r.status}`);
-      return r.json();
-    }
-    throw new Error('OpenF1 rate limit reached, try again in a minute');
-  };
-  return (queue = queue.then(run, run));
+// A finished session never changes, and neither does a past season's race list: those answers are
+// kept in the browser (Cache API) and fetched once. This season's race list is always fetched.
+// shortcut: nothing is ever evicted (a full race is about 70 MB); clear the site's data if it grows too big.
+const keep = path => path.includes('session_key=') || +path.match(/year=(\d+)/)?.[1] < new Date().getFullYear();
+// The free tier allows 3 requests a second and 30 a minute: requests start at least 340 ms apart, in the
+// order they were asked for, and may overlap.
+let nextAt = 0;
+async function api(path) {
+  // No cache in private windows or on plain http: then every call just goes to the network.
+  const store = keep(path) ? await window.caches?.open('openf1').catch(() => null) : null;
+  const hit = await store?.match(API + path);
+  if (hit) return hit.json();
+  for (let i = 1; i <= 5; i++) {
+    nextAt = Math.max(Date.now(), nextAt + 340);
+    await sleep(nextAt - Date.now());
+    const r = await fetch(API + path);
+    if (r.status === 429) { await sleep(3000 * i); continue; }
+    if (r.status === 404) return []; // OpenF1 answers 404 for "no rows" (not cached: the rows may come later)
+    if (!r.ok) throw new Error(`OpenF1 answered ${r.status}`);
+    store?.put(API + path, r.clone()).catch(() => {}); // a full disk must not break the replay
+    return r.json();
+  }
+  throw new Error('OpenF1 rate limit reached, try again in a minute');
 }
 
 // Index of the last item at or before time t, -1 if none. arr is sorted by time.
@@ -71,7 +79,7 @@ function buttons(nav, items, pressed, onPick) {
     b.setAttribute('aria-pressed', it.value === pressed);
     b.onclick = () => onPick(it.value);
     nav.append(b);
-    if (it.value === pressed) b.scrollIntoView({ block: 'nearest', inline: 'center' });
+    if (it.value === pressed) nav.scrollLeft = b.offsetLeft - nav.offsetLeft - (nav.clientWidth - b.offsetWidth) / 2; // centred in its row (scrollIntoView would also move the page)
   }
 }
 
@@ -80,90 +88,155 @@ async function showYear(y) {
   const now = new Date().getFullYear();
   buttons($('years'), Array.from({ length: now - 2022 }, (_, i) => ({ label: 2023 + i, value: 2023 + i })), y, showYear);
   $('races').textContent = '';
-  say('Loading races…');
+  loading(0, 1, 'races');
   let sessions;
-  try { sessions = await api(`sessions?year=${y}&session_type=Race`); } catch (e) { return say(e.message); } // races and sprints
+  try { sessions = await api(`sessions?year=${y}&session_type=Race`); } catch (e) { return fail(e.message); } // races and sprints
   if (y !== year) return;
   sessions.sort((a, b) => ms(a.date_start) - ms(b.date_start));
   const ready = s => !s.is_cancelled && Date.now() > ms(s.date_end) + FREE_AFTER;
-  const pick = key => {
-    showRaces(key);
-    loadRace(sessions.find(s => s.session_key === key));
+  // One button per race weekend. A weekend with a sprint gets a Race / Sprint choice beside the title.
+  const meets = Object.values(sessions.reduce((by, s) => ((by[s.meeting_key] ??= []).push(s), by), {})).sort((a, b) => ms(a[0].date_start) - ms(b[0].date_start));
+  const pick = s => {
+    const m = meets.find(m => m.includes(s));
+    buttons($('races'), meets.map(m => ({
+      label: m.at(-1).circuit_short_name, value: m, disabled: !m.some(ready), // the race is the weekend's last session
+      title: `${m[0].country_name}, ${m.at(-1).date_start.slice(0, 10)}${m.some(ready) ? '' : ' (no free data yet)'}`,
+    })), m, m => pick(m.findLast(ready)));
+    buttons($('kind'), m?.length > 1 ? m.toReversed().map(x => ({ label: x.session_name, value: x, disabled: !ready(x), title: ready(x) ? '' : 'No free data yet' })) : [], s, pick);
+    if (s) loadRace(s);
   };
-  const showRaces = key => buttons($('races'), sessions.map(s => ({
-    label: s.circuit_short_name + (s.session_name === 'Race' ? '' : ` ${s.session_name}`), value: s.session_key, disabled: !ready(s),
-    title: `${s.country_name}, ${s.date_start.slice(0, 10)}${ready(s) ? '' : ' (no free data yet)'}`,
-  })), key, pick);
-  const last = sessions.filter(ready).pop();
-  if (last) pick(last.session_key);
-  else { showRaces(); say(sessions.length ? 'No finished race this season yet.' : 'No races found.'); }
+  const last = sessions.findLast(ready);
+  pick(last);
+  if (!last) fail(sessions.length ? 'No finished race this season yet.' : 'No races found.');
 }
 
 // ---- loading one race ----
 
+// What is still loading, shown on the map card ("Loading gaps… 5 of 13"); nothing left hides it.
+function loading(done, total, what) {
+  $('loading').hidden = done >= total;
+  $('loadText').textContent = `Loading ${what}…${total > 1 ? ` ${done + 1} of ${total}` : ''}`;
+  $('loadBar').style.width = `${100 * done / total}%`;
+}
+const fail = text => { $('loading').hidden = true; say(text); };
+// Until a session has its first data only the map card shows, with the loading line on it.
+function blank() {
+  for (const id of ['timing', 'more', 'champ', 'rcBox', 'radioBox', 'otBox']) $(id).hidden = true;
+  $('stage').classList.add('empty');
+  tab('timing'); // the next race may have no overtakes or standings to show
+  setView({ z: 1, x: 0, y: 0 });
+  fit($('map')); // wipes the last session's map
+  $('rc').textContent = $('radio').textContent = $('ot').textContent = '';
+  audio.pause();
+}
+
+// In the order they are fetched: the first four draw the map and the timing tower, the rest fill in behind them.
+const PARTS = { drivers: 'drivers', laps: 'laps', position: 'positions', location: 'the track', intervals: 'gaps', stints: 'tyres', pit: 'pit stops',
+  race_control: 'race control', team_radio: 'radio', championship_drivers: 'standings', championship_teams: 'standings', overtakes: 'overtakes', session_result: 'results' };
+
 async function loadRace(s) {
-  const id = ++loadId;
+  const id = ++loadId, k = `session_key=${s.session_key}`, names = Object.values(PARTS);
   S = null;
   setPlaying(false);
-  $('main').hidden = true;
-  const title = `${s.circuit_short_name} ${s.year} ${s.session_name}`;
-  say(`Loading ${title}…`);
-  const k = `session_key=${s.session_key}`;
+  blank();
+  say(`${s.circuit_short_name} ${s.year} ${s.session_name} · ${s.country_name}`);
+  let done = 0;
+  loading(0, names.length, names[0]);
+  const get = path => api(path).then(rows => { if (id === loadId) loading(++done, names.length, names[done]); return rows; });
   try {
-    const [drivers, laps, pos, intv, stints, pits, rc, radio, champD, champT, overtakes] = await Promise.all(
-      ['drivers', 'laps', 'position', 'intervals', 'stints', 'pit', 'race_control', 'team_radio',
-        'championship_drivers', 'championship_teams', 'overtakes'].map(e => api(`${e}?${k}`)));
+    const [drivers, laps, pos] = await Promise.all(['drivers', 'laps', 'position'].map(e => get(`${e}?${k}`)));
     if (id !== loadId) return;
-    if (!laps.length || !drivers.length) return say('No timing data for this race.');
+    if (!laps.length || !drivers.length) return fail('No timing data for this race.');
 
     // The track outline is one clean lap of one car.
     const best = laps.filter(l => l.lap_duration && l.date_start && !l.is_pit_out_lap && l.lap_number > 1)
       .sort((a, b) => a.lap_duration - b.lap_duration)[0];
     const t = best ? ms(best.date_start) : 0;
-    const outline = best ? await api(`location?${k}&driver_number=${best.driver_number}&date>=${iso(t)}&date<=${iso(t + best.lap_duration * 1000 + 500)}`) : [];
+    const outline = best ? await get(`location?${k}&driver_number=${best.driver_number}&date>=${iso(t)}&date<=${iso(t + best.lap_duration * 1000 + 500)}`) : [];
     if (id !== loadId) return;
     const track = outline.filter(p => p.x || p.y);
-    if (track.length < 10) return say('No position data for this race.');
+    if (track.length < 10) return fail('No position data for this race.');
+    const s1 = best.duration_sector_1, s2 = best.duration_sector_2;
 
     const timed = laps.filter(l => l.date_start);
     const start = Math.min(...timed.filter(l => l.lap_number === 1).map(l => ms(l.date_start)));
-    const lane = pits.map(p => p.lane_duration ?? p.pit_duration).filter(d => d > 0 && d < 90); // 90 s: drops red-flag "stops"
-    S = {
+    const r = S = {
       k, start,
       t0: start - 60e3,
       t1: Math.max(...timed.map(l => ms(l.date_start) + (l.lap_duration ?? 0) * 1000)) + 60e3,
       t: start - 60e3,
       pts: s.session_name === 'Sprint' ? SPRINT_PTS : PTS,
       drivers: Object.fromEntries(drivers.map(d => [d.driver_number, d])),
-      laps: group(timed, l => ({ t: ms(l.date_start), n: l.lap_number })),
+      laps: group(timed, l => ({ t: ms(l.date_start), n: l.lap_number, d: l.lap_duration })),
       totalLaps: Math.max(...laps.map(l => l.lap_number)),
       pos: group(pos, p => ({ t: ms(p.date), p: p.position })),
-      intv: group(intv, i => ({ t: ms(i.date), gap: i.gap_to_leader, int: i.interval })),
-      stints: group(stints, x => ({ t: x.lap_start, ...x })),
-      pits: group(pits, p => ({ t: ms(p.date) })),
-      rc: rc.map(m => ({ t: ms(m.date), ...m })).sort(byTime),
-      radio: radio.map(m => ({ t: ms(m.date), ...m })).sort(byTime),
-      overtakes: overtakes.map(o => ({ t: ms(o.date), ...o })).sort(byTime).map((o, i) => ({ ...o, i })),
-      champD, champT,
-      pitLoss: lane.length ? median(lane) : null,
-      track, box: box(track),
+      intv: {}, stints: {}, pits: {}, rc: [], radio: [], overtakes: [], champD: [], champT: [], pitLoss: null, out: {}, // filled in below
+      track, box: box(track), circuit: s.circuit_short_name,
+      marks: s1 && s2 ? [0, s1, s1 + s2].map(u => Math.max(0, track.findIndex(p => ms(p.date) >= t + u * 1000))) : [], // where each sector starts, as places in `track`
       pending: {}, loc: {}, shown: {},
     };
-    $('seek').max = Math.round((S.t1 - S.t0) / 1000);
+    $('seek').max = Math.round((r.t1 - r.t0) / 1000);
     $('seek').value = 0;
     showPitLoss();
-    $('champ').hidden = !champD.length;
-    $('otBox').hidden = !S.overtakes.length;
-    $('rc').textContent = $('radio').textContent = $('ot').textContent = '';
-    $('main').hidden = false;
-    say(`${title} · ${s.country_name}`);
+    $('stage').classList.remove('empty');
+    $('timing').hidden = $('more').hidden = false;
     render();
+    chunk(0); // the cars come next, before the rest
+
+    const fill = {
+      intervals: rows => { r.intv = group(rows, i => ({ t: ms(i.date), gap: i.gap_to_leader, int: i.interval })); },
+      stints: rows => { r.stints = group(rows, x => ({ t: x.lap_start, ...x })); },
+      pit: rows => {
+        r.pits = group(rows, p => ({ t: ms(p.date) }));
+        const lane = rows.map(p => p.lane_duration ?? p.pit_duration).filter(d => d > 0 && d < 90); // 90 s: drops red-flag "stops"
+        r.pitLoss = lane.length ? median(lane) : null;
+        showPitLoss();
+      },
+      race_control: rows => { r.rc = rows.map(m => ({ t: ms(m.date), ...m })).sort(byTime); $('rcBox').hidden = false; },
+      team_radio: rows => { r.radio = rows.map(m => ({ t: ms(m.date), ...m })).sort(byTime); $('radioBox').hidden = false; },
+      championship_drivers: rows => { r.champD = rows; $('champ').hidden = !rows.length; },
+      championship_teams: rows => { r.champT = rows; },
+      overtakes: rows => { r.overtakes = rows.map(o => ({ t: ms(o.date), ...o })).sort(byTime).map((o, i) => ({ ...o, i })); $('otBox').hidden = !rows.length; },
+      // Retirements. from: the start of the lap the car never finished; due: when it should have come round again.
+      session_result: rows => {
+        for (const x of rows) if (x.dnf || x.dns) {
+          const l = r.laps[x.driver_number] ?? [], a = l.at(-1), lap = a && l.at(-2) ? a.t - l.at(-2).t : 120e3;
+          const from = !a ? 0 : a.n > x.number_of_laps ? a.t : a.t + lap; // the unfinished lap is usually listed, with no time
+          r.out[x.driver_number] = x.dns || !a ? { dns: true, due: -Infinity } : { from, due: from + lap * 1.1 };
+        }
+      },
+    };
+    await Promise.all(Object.keys(fill).map(e => get(`${e}?${k}`).then(rows => { if (r === S) fill[e](rows); })));
   } catch (e) {
-    if (id === loadId) say(e.message);
+    if (id === loadId) fail(e.message);
   }
 }
 
-const showPitLoss = () => { $('pitloss').textContent = S.pitLoss ? `· a pit stop costs about ${S.pitLoss.toFixed(1)} s here` : ''; };
+const showPitLoss = () => { $('pitloss').textContent = S.pitLoss ? `A pit stop costs about ${S.pitLoss.toFixed(1)} s here.` : ''; };
+
+// The feed gives a car's position every 160 to 440 ms, with timestamps tens of ms out: drawn straight from
+// that, a car lurches (its speed changes by 16 m/s from one sample to the next, on average). smooth() turns one
+// car's samples into a position every GRID ms, each the average of where it was over HALF steps either side.
+const GRID = 100, HALF = 4;
+function smooth(t, x, y) {
+  const n = Math.floor((t.at(-1) - t[0]) / GRID) + 1, raw = [x, y].map(v => {
+    const out = new Float64Array(n);
+    for (let g = 0, i = 0; g < n; g++) {
+      const at = t[0] + g * GRID;
+      while (i + 2 < t.length && t[i + 1] <= at) i++;
+      const gap = t[i + 1] - t[i];
+      out[g] = gap > 3000 ? NaN : v[i] + (v[i + 1] - v[i]) * Math.min((at - t[i]) / gap, 1); // no signal for 3 s: no position, not a straight glide
+    }
+    return out;
+  });
+  const [sx, sy] = raw.map(v => v.map((_, g) => {
+    const h = Math.min(HALF, g, n - 1 - g); // a narrower window at the ends, so the two sides always balance
+    let sum = 0;
+    for (let j = g - h; j <= g + h; j++) sum += v[j];
+    return sum / (2 * h + 1);
+  }));
+  return { t0: t[0], x: sx, y: sy };
+}
 
 // Car positions for 5-minute piece i, fetched once.
 function chunk(i) {
@@ -172,9 +245,12 @@ function chunk(i) {
   s.pending[i] = api(`location?${s.k}&date>=${iso(s.t0 + i * CHUNK)}&date<${iso(s.t0 + (i + 1) * CHUNK)}`).then(rows => {
     const d = {};
     for (const r of rows) {
+      if (!(r.x || r.y)) continue; // 0,0 means "no signal"
       const a = d[r.driver_number] ??= { t: [], x: [], y: [] };
-      a.t.push(ms(r.date)); a.x.push(r.x); a.y.push(r.y);
+      const at = ms(r.date);
+      if (at > (a.t.at(-1) ?? 0)) { a.t.push(at); a.x.push(r.x); a.y.push(r.y); }
     }
+    for (const n in d) if (d[n].t.length > 1) d[n] = smooth(d[n].t, d[n].x, d[n].y); else delete d[n];
     s.loc[i] = d;
   }, e => { if (s === S) say(e.message); });
 }
@@ -186,10 +262,177 @@ function carXY(num, t) {
   }
   const d = S.loc[Math.floor((t - S.t0) / CHUNK)]?.[num];
   if (!d) return;
-  const i = Math.max(idx(d.t, t, x => x), 0), j = Math.min(i + 1, d.t.length - 1);
-  const f = j > i ? Math.min(Math.max((t - d.t[i]) / (d.t[j] - d.t[i]), 0), 1) : 0;
-  const x = d.x[i] + (d.x[j] - d.x[i]) * f, y = d.y[i] + (d.y[j] - d.y[i]) * f;
-  return x || y ? [x, y] : undefined; // 0,0 means "no signal"
+  const g = (t - d.t0) / GRID, i = Math.max(0, Math.min(d.x.length - 2, Math.floor(g))), f = Math.max(0, Math.min(1, g - i));
+  const x = d.x[i] + (d.x[i + 1] - d.x[i]) * f, y = d.y[i] + (d.y[i + 1] - d.y[i]) * f;
+  return x === x ? [x, y] : undefined; // NaN: no signal
+}
+
+// A retired car is "gone" 30 s after it stopped for good: it leaves the map and the tower says DNF.
+function gone(n, t) {
+  const o = S.out[n];
+  if (!o) return false;
+  if (t > o.due + 30e3) return true; // it never came round again
+  if (S.live || t < o.from + 30e3) return false;
+  const a = carXY(n, t), b = carXY(n, t - 30e3); // on its last lap and not moved for 30 s
+  return !!a && !!b && Math.hypot(a[0] - b[0], a[1] - b[1]) < 20;
+}
+
+// ---- track surface ----
+// The position data has no sideways information: it puts every car on one shared line (within 10 cm of each
+// other), and that line is a racing line, not the middle of the road (at Interlagos it is 4235 m long, exactly
+// the length of a computed racing line and 70 m shorter than the surveyed centre line). So the track's edges
+// cannot be measured from the cars. The track is drawn round that line, with the room to each side taken from:
+// - a surveyed map of the circuit, which says how far a racing line is from each edge all the way round: survey();
+// - where there is no map, or it no longer matches the layout, an estimate: road().
+const WIDTH = 120; // 12 m, typical for F1 (Interlagos, surveyed: 9 to 18 m, median 11.7); positions are in 1/10 m
+const STEP = 50;   // 5 m between stations along the line
+
+// Moving average over r neighbours each side, round a closed loop.
+const blur = (a, r) => a.map((_, i) => { let s = 0; for (let j = -r; j <= r; j++) s += a.at((i + j) % a.length); return s / (2 * r + 1); });
+
+// A closed loop of [x, y] as n evenly spaced points.
+function even(pts, n) {
+  const len = pts.map((p, i) => Math.hypot(pts[(i + 1) % pts.length][0] - p[0], pts[(i + 1) % pts.length][1] - p[1]));
+  const step = len.reduce((a, b) => a + b, 0) / n, out = [];
+  let need = 0;
+  pts.forEach((p, i) => {
+    const q = pts[(i + 1) % pts.length];
+    for (; need < len[i] && out.length < n; need += step) out.push([p[0] + (q[0] - p[0]) * need / len[i], p[1] + (q[1] - p[1]) * need / len[i]]);
+    need -= len[i];
+  });
+  return out;
+}
+// Direction of travel at each point of a closed loop, in radians, and how much it turns before the next point.
+const heading = c => c.map((_, i) => Math.atan2(c[(i + 2) % c.length][1] - c.at(i - 2)[1], c[(i + 2) % c.length][0] - c.at(i - 2)[0]));
+const turning = c => { const th = heading(c); return th.map((a, i) => Math.asin(Math.sin(th[(i + 1) % th.length] - a))); };
+// Index of the point in list nearest to q.
+function nearest(list, q) {
+  let k = 0, d = Infinity;
+  list.forEach((m, i) => { const e = (m[0] - q[0]) ** 2 + (m[1] - q[1]) ** 2; if (e < d) { d = e; k = i; } });
+  return k;
+}
+
+// The racing line (one real lap) as stations 5 m apart: a closed loop of [x, y].
+function stations(track) {
+  // The lap is recorded slightly past the line: cut it where it comes back closest to its start.
+  const far = i => Math.hypot(track[i].x - track[0].x, track[i].y - track[0].y);
+  let end = track.length - 1;
+  for (let i = track.length * 0.9 | 0; i < track.length; i++) if (far(i) < far(end)) end = i;
+  const loop = track.slice(0, end + 1).map(p => [p.x, p.y]);
+  const len = loop.reduce((a, p, i) => a + Math.hypot(loop[(i + 1) % loop.length][0] - p[0], loop[(i + 1) % loop.length][1] - p[1]), 0);
+  return even(loop, Math.round(len / STEP));
+}
+
+// The two edges of the track, as lists of [x, y], given the room to the left and to the right of each station.
+function band(c, left, right) {
+  const th = heading(c);
+  return [[left, 1], [right, -1]].map(([room, sign]) => blur(room, 3).map((o, i) => [c[i][0] - sign * Math.sin(th[i]) * o, c[i][1] + sign * Math.cos(th[i]) * o]));
+}
+
+// Estimated room to the [left, right] of each station, from two assumptions:
+// 1. the track is WIDTH wide all the way round;
+// 2. a racing line runs outside, inside, outside through a corner, which says where the line sits across the track.
+function rooms(c) {
+  const turn = turning(c), wide = blur(turn, 40);
+  // How sharply the line turns here (over 20 m) against how much it turns around here (over 200 m): at an apex
+  // the first is bigger and the line hugs the inside; just before and after a corner it is smaller and the line is outside.
+  const dog = blur(turn, 4).map((k, i) => k - wide[i]), rms = Math.hypot(...dog) / Math.sqrt(c.length) || 1;
+  // u: where the line sits across the track, from -0.8 (near the right edge) to 0.8 (near the left); a car never drives on the very edge.
+  const u = dog.map(d => Math.max(-.8, Math.min(.8, 2 * d / rms)));
+  return [u.map(v => WIDTH * (1 - v) / 2), u.map(v => WIDTH * (1 + v) / 2)];
+}
+const road = track => { const c = stations(track); return { of: track, edges: band(c, ...rooms(c)) }; };
+
+// Surveyed maps: TUM's racetrack database (LGPL-3.0), read from GitHub and kept in the browser cache. Each has
+// the centre line with the width to each side, and a racing line computed for that track.
+// OpenF1's circuit name -> the database's file name. It has no street circuits and no track built after 2020.
+const MAP_URL = 'https://raw.githubusercontent.com/TUMFTM/racetrack-database/master/';
+const MAPS = { Austin: 'Austin', Catalunya: 'Catalunya', Hungaroring: 'Budapest', Interlagos: 'SaoPaulo', 'Kuala Lumpur': 'Sepang',
+  Melbourne: 'Melbourne', 'Mexico City': 'MexicoCity', Montreal: 'Montreal', Monza: 'Monza', Sakhir: 'Sakhir', Shanghai: 'Shanghai',
+  Silverstone: 'Silverstone', 'Spa-Francorchamps': 'Spa', Spielberg: 'Spielberg', Suzuka: 'Suzuka', 'Yas Marina Circuit': 'YasMarina', Zandvoort: 'Zandvoort' };
+// How well a map must agree with our line, in 1/10 m. Measured over 17 circuits: an unchanged layout is 2 to 5 m
+// out over the lap, one with rebuilt corners 6 to 9 m (Catalunya, Melbourne, Yas Marina), another circuit over 100 m.
+const MAX_MISFIT = 120; // over the whole lap: beyond this the map is not used at all
+const NEAR = 80;        // at one station: beyond this (a rebuilt corner) that station keeps its estimate
+
+async function csv(url) {
+  const store = await window.caches?.open('openf1').catch(() => null);
+  let r = await store?.match(url);
+  if (!r) {
+    r = await fetch(url);
+    if (!r.ok) throw new Error(`${url} answered ${r.status}`);
+    store?.put(url, r.clone()).catch(() => {});
+  }
+  return (await r.text()).split('\n').filter(l => l && l[0] !== '#').map(l => l.split(',').map(Number));
+}
+
+// Lays a map's racing line over ours, to find which point of one is which point of the other.
+// line: ours, in 1/10 m; race: the map's, in m; both closed loops of [x, y]. Returns
+// { move, err, mirrored }: move takes a map point to our coordinates; err is how far apart the two lines stay
+// (root mean square, 1/10 m); mirrored says the map is a mirror image of ours.
+function align(line, race) {
+  const M = 800, a = even(line, M);
+  // Both loops are measured from their own middle, so that turning one about its middle is all that is left to find.
+  const centred = c => { const m = [0, 1].map(d => c.reduce((t, p) => t + p[d], 0) / M); return c.map(p => [p[0] - m[0], p[1] - m[1]]); };
+  const ca = centred(a);
+  let best = { err: Infinity };
+  // The map may run the other way round or be a mirror image: try all four and keep the closest.
+  for (const mirror of [1, -1]) for (const back of [false, true]) {
+    const flip = p => [p[0], p[1] * mirror], b = even(race.map(flip), M);
+    if (back) b.reverse();
+    // Start by pairing point i of ours with point i + shift of the map, for the shift that lets the two be
+    // brought closest together (the one whose pairs agree most once the map is turned)...
+    const cb = centred(b);
+    let shift = 0, top = -Infinity;
+    for (let j = 0; j < M; j++) {
+      let dot = 0, cross = 0;
+      for (let i = 0; i < M; i++) { const p = cb[(i + j) % M], q = ca[i]; dot += p[0] * q[0] + p[1] * q[1]; cross += p[0] * q[1] - p[1] * q[0]; }
+      if (Math.hypot(dot, cross) > top) { top = Math.hypot(dot, cross); shift = j; }
+    }
+    let pairs = a.map((q, i) => [b[(i + shift) % M], q]), turn, err;
+    // ...then turn and slide the map (never stretch it: 1 m is 10 units) to bring the pairs together, and
+    // re-pair each of our points with the nearest map point, four times over.
+    for (let round = 0; round < 4; round++) {
+      const mean = j => [0, 1].map(d => pairs.reduce((t, pq) => t + pq[j][d], 0) / M), [mp, mq] = [mean(0), mean(1)];
+      let dot = 0, cross = 0;
+      for (const [p, q] of pairs) { const px = p[0] - mp[0], py = p[1] - mp[1], qx = q[0] - mq[0], qy = q[1] - mq[1]; dot += px * qx + py * qy; cross += px * qy - py * qx; }
+      const th = Math.atan2(cross, dot), cos = 10 * Math.cos(th), sin = 10 * Math.sin(th);
+      turn = p => [mq[0] + cos * (p[0] - mp[0]) - sin * (p[1] - mp[1]), mq[1] + sin * (p[0] - mp[0]) + cos * (p[1] - mp[1])];
+      const moved = b.map(turn);
+      pairs = a.map(q => [b[nearest(moved, q)], q]);
+      err = Math.sqrt(pairs.reduce((t, [p, q]) => t + (turn(p)[0] - q[0]) ** 2 + (turn(p)[1] - q[1]) ** 2, 0) / M);
+    }
+    if (err < best.err) best = { move: p => turn(flip(p)), err, mirrored: mirror < 0 };
+  }
+  return best;
+}
+
+// Replaces the estimated edges of s's track with surveyed ones, if there is a map of the circuit that fits.
+// Two surveys of one circuit disagree by a few metres, too much to lay the map's edges straight onto our
+// coordinates (cars would be drawn off the tarmac). So only the room is taken from the map: how far its racing
+// line is from its left and right edge at each point round the lap, applied to our line at the same point.
+async function survey(s) {
+  const file = MAPS[s.circuit], track = s.track;
+  if (!file) return;
+  try {
+    const [centre, race] = await Promise.all(['tracks', 'racelines'].map(dir => csv(`${MAP_URL}${dir}/${file}.csv`)));
+    const c = stations(track), { move, err, mirrored } = align(c, race);
+    if (err > MAX_MISFIT) return console.warn(`${file}: the surveyed map is ${(err / 10).toFixed(1)} m off the racing line, so the edges are estimated`);
+    if (s.track !== track) return;
+    const th = heading(centre); // each row of centre: x, y, width to the right, width to the left
+    const room = race.map(p => {
+      const j = nearest(centre, p), m = centre[j];
+      const off = (p[1] - m[1]) * Math.cos(th[j]) - (p[0] - m[0]) * Math.sin(th[j]); // how far the racing line is left of the centre line
+      return [m[3] - off, m[2] + off].map(w => Math.max(10, w * 10)); // [left, right]; at least 1 m, half a car
+    });
+    const moved = race.map(move), k = c.map(q => nearest(moved, q)), thc = heading(c), thm = heading(moved), est = rooms(c);
+    // The map's left is our right if it is a mirror image or runs the other way round (but not both).
+    const swap = mirrored === k.reduce((t, j, i) => t + Math.cos(thc[i] - thm[j]), 0) > 0;
+    const pick = side => c.map((q, i) => Math.hypot(moved[k[i]][0] - q[0], moved[k[i]][1] - q[1]) < NEAR ? room[k[i]][swap ? 1 - side : side] : est[side][i]);
+    s.road = { of: track, surveyed: true, edges: band(c, pick(0), pick(1)) };
+  } catch (e) {
+    console.warn(`No surveyed map (${e.message}), so the edges are estimated`);
+  }
 }
 
 // ---- live car positions, estimated ----
@@ -291,11 +534,14 @@ function fit(c) {
   return [g, w, h];
 }
 
+const FONT = 'Bahnschrift, "DIN Alternate", "Roboto Condensed", system-ui, sans-serif'; // as the page
+const PAD = 28, TOP = 72, BOTTOM = 84; // the lap counter floats over the top of the map, the playback bar sits along the bottom
 function draw() {
   const [g, w, h] = fit($('map'));
-  g.fillStyle = '#9aa3b2';
-  g.font = '13px system-ui, sans-serif';
-  if (!S.track) return g.fillText('No reference lap for this circuit yet, so there is no live map.', 12, 20);
+  g.fillStyle = '#8e8e8e';
+  g.font = `13px ${FONT}`;
+  const note = text => { g.textAlign = 'right'; g.fillText(text, w - 20, h - 70); g.textAlign = 'left'; }; // above the playback bar, on the right: the loading line has the left
+  if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
 
   // An overtake close-up follows the two cars; otherwise the whole track is shown.
   if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; }
@@ -304,33 +550,53 @@ function draw() {
   const zoom = p && q;
   const R = zoom ? Math.max(1200, 0.7 * Math.hypot(p[0] - q[0], p[1] - q[1])) : 0; // half the close-up's width: 120 m, more if the cars are far apart
   const { x0, x1, y0, y1 } = zoom ? { x0: (p[0] + q[0]) / 2 - R, x1: (p[0] + q[0]) / 2 + R, y0: (p[1] + q[1]) / 2 - R, y1: (p[1] + q[1]) / 2 + R } : S.box;
-  const pad = 28;
-  const k = Math.min((w - 2 * pad) / (x1 - x0), (h - 2 * pad) / (y1 - y0));
-  const X = x => (w - (x1 - x0) * k) / 2 + (x - x0) * k;
-  const Y = y => (h + (y1 - y0) * k) / 2 - (y - y0) * k; // track y points up, canvas y points down
+  const v = zoom ? { z: 1, x: 0, y: 0 } : view; // a close-up ignores the user's own zoom
+  const k = v.z * Math.min((w - 2 * PAD) / (x1 - x0), (h - TOP - BOTTOM) / (y1 - y0));
+  const X = x => w / 2 + (x - (x0 + x1) / 2) * k + v.x;
+  const Y = y => (h + TOP - BOTTOM) / 2 - (y - (y0 + y1) / 2) * k + v.y; // track y points up, canvas y points down
 
+  // The track surface between its two estimated edges, then the racing line on it.
+  if (S.road?.of !== S.track) { S.road = road(S.track); survey(S); } // estimated now, surveyed a moment later if there is a map
+  const [l, r] = S.road.edges;
+  g.beginPath();
+  for (const e of l) g.lineTo(X(e[0]), Y(e[1]));
+  g.lineTo(X(l[0][0]), Y(l[0][1])); g.lineTo(X(r[0][0]), Y(r[0][1]));
+  for (const e of r.toReversed()) g.lineTo(X(e[0]), Y(e[1]));
+  g.closePath();
+  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = '#2e2e2e'; g.fill(); g.stroke();
   g.beginPath();
   for (const pt of S.track) g.lineTo(X(pt.x), Y(pt.y));
   g.closePath();
-  g.lineJoin = 'round'; g.lineWidth = zoom ? 140 * k : 8; g.strokeStyle = zoom ? '#2c313a' : '#4a505c'; g.stroke(); // 140 = a 14 m wide track
+  g.lineWidth = zoom ? 2 : 1; g.strokeStyle = 'rgba(255, 255, 255, .55)'; g.stroke();
 
-  if (S.live) g.fillText('Estimated positions (from mini-sector times)', 12, 16);
-  else if (!S.loc[Math.floor((S.t - S.t0) / CHUNK)]) return g.fillText('Loading car positions…', 12, 16);
+  g.font = `600 12px ${FONT}`;
+  if (opt.sectors) (S.marks ?? []).forEach((j, i) => { // a line across the track where each sector starts
+    const a = S.track.at(j - 2), b = S.track[(j + 2) % S.track.length], x = X(S.track[j].x), y = Y(S.track[j].y);
+    const dx = X(b.x) - X(a.x), dy = Y(b.y) - Y(a.y), d = Math.hypot(dx, dy) || 1, px = -dy / d, py = dx / d;
+    g.beginPath(); g.moveTo(x - 10 * px, y - 10 * py); g.lineTo(x + 10 * px, y + 10 * py);
+    g.lineWidth = 2; g.strokeStyle = g.fillStyle = '#fff'; g.stroke();
+    g.textAlign = 'center'; g.fillText(`S${i + 1}`, x + 22 * px, y + 22 * py); g.textAlign = 'left';
+  });
+  g.fillStyle = '#8e8e8e';
+  g.font = `13px ${FONT}`;
+
+  if (S.live) note('Estimated positions (from mini-sector times)');
+  else if (!S.loc[Math.floor((S.t - S.t0) / CHUNK)]) return note('Loading car positions…');
 
   for (const n of duo) { // the path each of the two cars took over the last 5 seconds
     g.beginPath();
     for (let u = S.t - 5000; u <= S.t; u += 200) { const xy = carXY(n, u); if (xy) g.lineTo(X(xy[0]), Y(xy[1])); }
     g.lineWidth = 3; g.strokeStyle = `#${S.drivers[n]?.team_colour || '999'}`; g.stroke();
   }
-  g.font = '600 11px system-ui, sans-serif';
+  g.font = `600 12px ${FONT}`;
   for (const { n } of order(S.t).reverse()) { // leader drawn last, on top
     const xy = carXY(n, S.t);
-    if (!xy) continue;
+    if (!xy || gone(n, S.t)) continue;
     const d = S.drivers[n], x = X(xy[0]), y = Y(xy[1]);
     g.beginPath(); g.arc(x, y, 6, 0, 2 * Math.PI);
     g.fillStyle = `#${d.team_colour || '999'}`; g.fill();
-    g.lineWidth = 1.5; g.strokeStyle = '#111317'; g.stroke();
-    g.fillStyle = '#fff'; g.fillText(d.name_acronym, x + 9, y);
+    g.lineWidth = 1.5; g.strokeStyle = '#000'; g.stroke();
+    if (opt.names) { g.fillStyle = '#fff'; g.fillText(d.name_acronym, x + 9, y); }
   }
 }
 
@@ -341,11 +607,11 @@ const clock = t => {
 const fmtGap = g => typeof g === 'number' ? (g ? `+${g.toFixed(3)}` : '') : esc(g);
 const tyreTag = c => `<span class="tyre" style="color:${TYRE[c] ?? '#999'}" title="${esc(c)}">${esc((c ?? '?')[0])}</span>`;
 
-// Rebuild a list only when its length changes, so buttons in it stay clickable.
+// Everything so far, newest first. Rebuilt only when its length changes, so buttons in it stay clickable.
 function list(id, items, html) {
   if (S.shown[id] === items.length) return;
   S.shown[id] = items.length;
-  $(id).innerHTML = items.slice(-8).reverse().map(html).join('');
+  $(id).innerHTML = items.toReversed().map(html).join('');
 }
 
 // Tyre wear for each stint of driver n: how much slower each lap gets, with the fuel effect taken out.
@@ -369,40 +635,34 @@ function wear(n, t) {
   }).filter(r => r.st.lap_start <= (at(laps, t)?.n ?? 1));
 }
 
-// The gap between two drivers at the start of every lap, as text, a chart and their tyre wear.
+const lapTime = s => `${Math.floor((s = Math.round(s * 1000) / 1000) / 60)}:${(s % 60).toFixed(3).padStart(6, '0')}`;
+
+// Seconds driver n took for each lap finished by time t, by lap number.
+// shortcut: live laps are timed by when the feed reported them (a few tenths out); read LastLapTime in ingest() for official times.
+function lapTimes(n, t) {
+  const rows = S.laps[n] ?? [], out = new Map();
+  for (let i = 0; i + 1 < rows.length && rows[i + 1].t <= t; i++)
+    if (rows[i + 1].n === rows[i].n + 1) out.set(rows[i].n, rows[i].d ?? (rows[i + 1].t - rows[i].t) / 1000);
+  return out;
+}
+
+// Two drivers' last five laps side by side, as on the TV broadcast: on each lap the slower driver
+// shows the lap time and the faster one shows only how much quicker they were.
 function renderCompare(t, ord) {
-  if (S.shown.cmp !== ord.length) { // fill the two pickers; keep a choice that still exists
+  if (S.shown.cmp !== ord.length) { // fill the driver pickers; keep a choice that still exists
     S.shown.cmp = ord.length;
-    [['cmpA', ord[0]], ['cmpB', ord[1] ?? ord[0]]].forEach(([id, def]) => {
+    [['cmpA', ord[0].n], ['cmpB', (ord[1] ?? ord[0]).n], ['otWho', '']].forEach(([id, def]) => {
       const el = $(id), keep = el.value;
-      el.innerHTML = ord.map(o => `<option value="${esc(o.n)}">${esc(name(o.n))}</option>`).join('');
-      el.value = S.drivers[keep] ? keep : def.n;
+      el.innerHTML = (id === 'otWho' ? '<option value="">All drivers</option>' : '') + ord.map(o => `<option value="${esc(o.n)}">${esc(name(o.n))}</option>`).join('');
+      el.value = S.drivers[keep] ? keep : def;
     });
   }
-  const a = $('cmpA').value, b = $('cmpB').value;
-  const tb = new Map((S.laps[b] ?? []).map(l => [l.n, l.t]));
-  const pts = a === b ? [] : (S.laps[a] ?? []).filter(l => l.t <= t && tb.get(l.n) <= t).map(l => ({ n: l.n, gap: (tb.get(l.n) - l.t) / 1000 })); // + means b is behind
-  const last = pts.at(-1), was = pts.at(-4);
-  let text = a === b ? 'Pick two different drivers.' : 'No laps to compare yet.';
-  if (last) {
-    const [ahead, behind] = last.gap >= 0 ? [a, b] : [b, a];
-    text = `Start of lap ${last.n}: ${name(behind)} is ${Math.abs(last.gap).toFixed(1)} s behind ${name(ahead)}`;
-    const perLap = was ? (last.gap - was.gap) / 3 * Math.sign(last.gap || 1) : 0; // negative: the gap is shrinking
-    text += !was ? '.' : Math.abs(perLap) < 0.05 ? ', gap steady.' : `, ${perLap < 0 ? 'catching' : 'losing'} ${Math.abs(perLap).toFixed(2)} s a lap over the last 3 laps.`;
-  }
-  $('cmpText').textContent = text;
-
-  const [g, w, h] = fit($('cmp'));
-  if (pts.length > 1) {
-    const gaps = pts.map(pt => pt.gap), lo = Math.min(0, ...gaps), hi = Math.max(0, ...gaps);
-    const X = i => 40 + i * (w - 48) / (pts.length - 1), Y = v => 10 + (hi - v) * (h - 20) / (hi - lo || 1);
-    g.strokeStyle = '#4a505c'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(40, Y(0)); g.lineTo(w - 8, Y(0)); g.stroke(); // the zero line: level on track
-    g.beginPath(); pts.forEach((pt, i) => g.lineTo(X(i), Y(pt.gap)));
-    g.strokeStyle = '#e10600'; g.lineWidth = 2; g.stroke();
-    g.fillStyle = '#9aa3b2'; g.font = '11px system-ui, sans-serif';
-    g.fillText(`${hi.toFixed(1)} s`, 2, 10); g.fillText(`${lo.toFixed(1)} s`, 2, h - 10);
-  }
+  const a = $('cmpA').value, b = $('cmpB').value, A = lapTimes(a, t), B = lapTimes(b, t);
+  const ns = a === b ? [] : [...A.keys()].filter(n => B.has(n)).slice(-5);
+  $('cmpText').textContent = a === b ? 'Pick two different drivers.' : ns.length ? '' : 'No laps to compare yet.';
+  const row = (n, X, Y) => `<tr><td><span class="bar" style="background:#${esc(S.drivers[n].team_colour || '999')}"></span>${esc(name(n))}</td>` +
+    ns.map(i => X.get(i) < Y.get(i) ? `<td class="n fast">${(X.get(i) - Y.get(i)).toFixed(3)}</td>` : `<td class="n">${lapTime(X.get(i))}</td>`).join('') + '</tr>';
+  $('laps').innerHTML = ns.length ? `<tr><th></th>${ns.map(i => `<th class="n">Lap ${i}</th>`).join('')}</tr>${row(a, A, B)}${row(b, B, A)}` : '';
 
   $('wear').innerHTML = [...new Set([a, b])].flatMap(n => wear(n, t).map(r =>
     `<tr><td>${esc(name(n))}</td><td>${tyreTag(r.st.compound)}</td><td>from lap ${esc(r.st.lap_start)}</td><td class="n">${r.laps} laps</td>` +
@@ -434,10 +694,15 @@ function render() {
   $('yellows').innerHTML = [...yellow].sort((a, b) => a - b).map(s => `<span class="chip yellow">Yellow: sector ${esc(s)}</span>`).join(' ');
 
   list('rc', seen, m => `<li><time>${clock(m.t)}</time>${esc(m.message)}</li>`);
-  list('radio', S.radio.slice(0, idx(S.radio, t) + 1), m => /^https:\/\//.test(m.recording_url)
-    ? `<li><button data-url="${esc(m.recording_url)}">Play</button><time>${clock(m.t)}</time>${esc(name(m.driver_number))}</li>` : '');
-  list('ot', (S.overtakes ?? []).slice(0, idx(S.overtakes ?? [], t) + 1), o =>
-    `<li><button data-ot="${o.i}">Watch</button><time>${clock(o.t)}</time>${esc(name(o.overtaking_driver_number))} passed ${esc(name(o.overtaken_driver_number))} for P${esc(o.position)}</li>`);
+  list('radio', S.radio.slice(0, idx(S.radio, t) + 1).filter(m => /^https:\/\//.test(m.recording_url)), m =>
+    `<li style="--team:#${esc(S.drivers[m.driver_number]?.team_colour || '999')}"><button class="pp" data-url="${esc(m.recording_url)}"></button>` +
+    `<time>${clock(m.t)}</time><b>${esc(name(m.driver_number))}</b><span class="len"></span><div class="prog"><i></i></div><p class="said">${esc(hear(m.recording_url, m.t))}</p></li>`);
+  showClip();
+  const who = $('otWho').value;
+  list('ot', (S.overtakes ?? []).slice(0, idx(S.overtakes ?? [], t) + 1)
+    .filter(o => o.position <= otTop && (!who || o.overtaking_driver_number == who || o.overtaken_driver_number == who)), o =>
+    `<li class="${o.position <= 3 ? 'key' : ''}"><button data-ot="${o.i}">Watch</button><time>${clock(o.t)}</time>${esc(name(o.overtaking_driver_number))} ` +
+    (o.position === 1 ? `took the lead from ${esc(name(o.overtaken_driver_number))}` : `passed ${esc(name(o.overtaken_driver_number))} for P${esc(o.position)}`) + '</li>');
 
   // Timing tower.
   const gaps = {};
@@ -446,16 +711,34 @@ function render() {
     gaps[n] = i && t - i.t < STALE ? i : null;
   }
   const num = n => typeof gaps[n]?.gap === 'number' ? gaps[n].gap : Infinity;
-  $('tower').innerHTML = ord.map(({ n, p }) => {
+  // Each driver keeps one row, which is moved rather than rebuilt, so a change of position is seen as a move.
+  const rows = S.rows ??= {};
+  for (const { n, p } of ord) {
     const d = S.drivers[n], lap = lapOf(n) || 1;
     const st = S.stints[n]?.filter(x => x.lap_start <= lap).pop();
     const tyre = st ? `${tyreTag(st.compound)} ${st.tyre_age_at_start + lap - st.lap_start}` : '';
     const stops = idx(S.pits[n] ?? [], t) + 1;
     const after = racing && S.pitLoss && num(n) < Infinity
       ? `P${rejoin(num(n), S.pitLoss, ord.filter(o => o.n !== n).map(o => num(o.n)))}` : '';
-    return `<tr><td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td>` +
-      `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td></tr>`;
-  }).join('');
+    const dnf = gone(n, t) && (S.out[n].dns ? 'DNS' : 'DNF');
+    (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
+    rows[n].innerHTML = dnf ? `<td></td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td>` +
+      `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
+  }
+  const key = ord.map(o => o.n).join();
+  if (key !== S.shown.tower) {
+    S.shown.tower = key;
+    // Where each row is on screen right now, mid-move or not: the slide to its new place starts from there.
+    // No slide after a jump on the slider (more than 30 s of race since the last look): the whole order is new then.
+    const was = Math.abs(t - S.shown.at) > 30e3 || matchMedia('(prefers-reduced-motion: reduce)').matches ? [] : ord.filter(o => rows[o.n].isConnected).map(o => [rows[o.n], rows[o.n].getBoundingClientRect().top]);
+    for (const [tr] of was) tr.getAnimations().forEach(a => a.cancel());
+    $('tower').replaceChildren(...ord.map(o => rows[o.n]));
+    for (const [tr, y] of was) {
+      const dy = y - tr.getBoundingClientRect().top;
+      if (dy) tr.animate({ transform: [`translateY(${dy}px)`, 'none'] }, { duration: 450, easing: 'cubic-bezier(.2, .9, .3, 1)' }); // settles without overshoot
+    }
+  }
+  S.shown.at = t;
 
   renderCompare(t, ord);
 
@@ -489,11 +772,15 @@ function ingest(s, [topic, d, time]) {
   if (topic === 'SessionInfo') {
     if (d.Key) s.key = d.Key;
     if (d.Path) s.path = d.Path;
+    if (d.Meeting?.Circuit?.ShortName) s.circuit = d.Meeting.Circuit.ShortName;
     if (d.Name) { s.title = `${d.Meeting?.Name ?? ''} ${d.Name}`; s.pts = { Race: PTS, Sprint: SPRINT_PTS }[d.Name]; }
   }
   if (topic === 'Ref') { // added by server.mjs: a reference lap of this circuit and the standings before this session
     s.champD = d.champD ?? []; s.champT = d.champT ?? [];
-    if (d.track) { s.ref = d.track; s.track = d.track.pts; s.box = box(s.track); }
+    if (d.track) {
+      s.ref = d.track; s.track = d.track.pts; s.box = box(s.track);
+      s.marks = [0, d.track.s1, d.track.s1 + d.track.s2].map(u => Math.max(0, s.track.findIndex(p => p.t >= u)));
+    }
   }
   if (topic === 'SessionData') each(d.StatusSeries, (_, v) => { if (v.SessionStatus === 'Started' && v.Utc) s.started ??= utc(v.Utc); });
   if (topic === 'LapCount' && d.TotalLaps) s.totalLaps = d.TotalLaps;
@@ -512,6 +799,7 @@ function ingest(s, [topic, d, time]) {
     }
     if (v.NumberOfLaps >= (s.laps[n]?.at(-1)?.n ?? 0)) add(s.laps, n, { t, n: v.NumberOfLaps + 1 });
     for (let k = s.pits[n]?.length ?? 0; k < v.NumberOfPitStops; k++) add(s.pits, n, { t });
+    if (v.Retired) s.out[n] ??= { due: t };
     // Mini-sectors: a status that is not 0 means the car has just finished that one.
     each(v.Sectors, (i, sec) => {
       if (Array.isArray(sec.Segments)) return void (s.segs[i] = Math.max(s.segs[i] ?? 0, sec.Segments.length)); // the full state only tells how many there are
@@ -560,10 +848,10 @@ async function loadLive() {
   ++loadId; // drops a race that is still loading
   setPlaying(false);
   const s = S = { live: true, next: 0, drivers: {}, laps: {}, pos: {}, intv: {}, stints: {}, pits: {}, rcAll: {}, radioAll: {}, lane: {},
-    seg: {}, segs: [], prog: {}, F: [], fix: {}, skew: -Infinity,
+    seg: {}, segs: [], prog: {}, F: [], fix: {}, out: {}, skew: -Infinity,
     rc: [], radio: [], overtakes: [], champD: [], champT: [], totalLaps: '?', shown: {} };
-  $('rc').textContent = $('radio').textContent = '';
-  $('main').hidden = $('champ').hidden = $('otBox').hidden = true;
+  blank();
+  $('loading').hidden = true;
   say('Connecting to the live recording…');
   while (S === s) {
     try {
@@ -584,7 +872,8 @@ async function loadLive() {
         $('seek').max = Math.round((s.t1 - s.t0) / 1000);
         if (s.t === undefined) { // first data: jump to the live edge and follow it
           s.t = edge();
-          $('main').hidden = false;
+          $('stage').classList.remove('empty');
+          for (const id of ['timing', 'more', 'rcBox', 'radioBox']) $(id).hidden = false;
           setPlaying(true);
           say(`Live recording · ${s.title ?? ''} · drag the slider back to see what you missed`);
         }
@@ -596,16 +885,108 @@ async function loadLive() {
   }
 }
 
+// One panel at a time beside the map.
+function tab(name) {
+  for (const b of $('tabs').children) b.setAttribute('aria-pressed', b.dataset.tab === name);
+  for (const p of document.querySelectorAll('[data-p]')) p.classList.toggle('cur', p.dataset.p === name);
+}
+$('tabs').onclick = e => { if (e.target.dataset.tab) tab(e.target.dataset.tab); };
+
+// A row of choices inside a panel: the pressed button's value is the choice.
+function choice(nav, onPick) {
+  nav.onclick = e => {
+    if (e.target.parentNode !== nav) return;
+    for (const b of nav.children) b.setAttribute('aria-pressed', b === e.target);
+    onPick(e.target.value);
+  };
+}
+let otTop = 99; // overtakes shown: for this position or better
+const refilter = () => { if (S) S.shown.ot = -1; }; // the overtake list is rebuilt on the next render
+choice($('otTop'), v => { otTop = +v; refilter(); });
+$('otWho').onchange = refilter;
+choice($('champNav'), v => { $('champD').parentNode.hidden = v !== 'D'; $('champT').parentNode.hidden = v !== 'T'; });
+
+// A drop-down drawn by the page instead of the browser. The <select> stays, hidden, and still holds
+// the value, so the rest of the code reads and sets it as before; show() copies its value to the button.
+const menus = [...document.querySelectorAll('select')].map(sel => {
+  const box = document.createElement('span'), btn = document.createElement('button'), pop = document.createElement('div');
+  box.className = 'menu';
+  sel.hidden = pop.hidden = true;
+  sel.after(box);
+  box.append(btn, pop);
+  const close = () => { pop.hidden = true; btn.ariaExpanded = 'false'; };
+  btn.onclick = () => {
+    if (!pop.hidden) return close();
+    pop.replaceChildren(...[...sel.options].map(o => {
+      const b = document.createElement('button');
+      b.textContent = o.text;
+      b.setAttribute('aria-pressed', o.selected);
+      b.onclick = () => { sel.value = o.value; sel.dispatchEvent(new Event('change')); close(); btn.focus(); };
+      return b;
+    }));
+    pop.hidden = false;
+    btn.ariaExpanded = 'true';
+    pop.querySelector('[aria-pressed=true]')?.focus();
+  };
+  box.onkeydown = e => {
+    if (e.key === 'Escape' && !pop.hidden) { close(); btn.focus(); }
+    const to = { ArrowDown: 'nextSibling', ArrowUp: 'previousSibling' }[e.key];
+    if (to && e.target.parentNode === pop) { e.target[to]?.focus(); e.preventDefault(); }
+  };
+  const show = () => {
+    const text = sel.selectedOptions[0]?.text ?? '';
+    if (btn.textContent !== text) { btn.textContent = text; btn.ariaLabel = `${sel.ariaLabel}: ${text}`; }
+  };
+  show();
+  return { box, close, show };
+});
+for (const ev of ['pointerdown', 'focusin']) document.addEventListener(ev, e => { for (const m of menus) if (!m.box.contains(e.target)) m.close(); });
+
+// ---- map view: zoom, pan, and what is drawn on it ----
+const view = { z: 1, x: 0, y: 0 }; // z: 1 shows the whole track; x, y: how far it is dragged, in pixels
+const opt = { sectors: false, names: true, ...JSON.parse(localStorage.mapOpt ?? '{}') };
+// The view at zoom z2 that keeps the point m (pixels from the middle of the map) where it is.
+const zoomAt = (v, m, z2) => ({ z: z2, x: m[0] - (m[0] - v.x) * z2 / v.z, y: m[1] - (m[1] - v.y) * z2 / v.z });
+function setView(v) {
+  const c = $('map'), z = v.z, lim = (z - 1) / 2; // the track cannot be dragged out of sight
+  Object.assign(view, { z, x: Math.max(-lim * c.clientWidth, Math.min(lim * c.clientWidth, v.x)), y: Math.max(-lim * c.clientHeight, Math.min(lim * c.clientHeight, v.y)) });
+  c.style.touchAction = z > 1 ? 'none' : ''; // zoomed in, a finger drags the map; zoomed out, it scrolls the page
+  c.style.cursor = z > 1 ? 'grab' : '';
+  $('zout').disabled = $('zfit').disabled = z === 1;
+  $('zin').disabled = z === 16;
+}
+const zoomBy = (f, m = [0, 0]) => setView(zoomAt(view, m, Math.max(1, Math.min(16, view.z * f))));
+$('zin').onclick = () => zoomBy(1.6);
+$('zout').onclick = () => zoomBy(1 / 1.6);
+$('zfit').onclick = () => setView({ z: 1, x: 0, y: 0 });
+$('map').addEventListener('wheel', e => {
+  if (!S?.track) return;
+  const c = e.target;
+  zoomBy(Math.exp(-e.deltaY / 400), [e.offsetX - c.clientWidth / 2, e.offsetY - (c.clientHeight + TOP - BOTTOM) / 2]);
+  e.preventDefault(); // the wheel zooms the map instead of scrolling the page
+}, { passive: false });
+// shortcut: a finger drags the map but two fingers do not pinch it (the buttons zoom); add pinch if phones need it.
+let drag = null;
+$('map').onpointerdown = e => { if (view.z > 1) { e.target.setPointerCapture(e.pointerId); drag = [e.clientX - view.x, e.clientY - view.y]; } };
+$('map').onpointermove = e => { if (drag) setView({ ...view, x: e.clientX - drag[0], y: e.clientY - drag[1] }); };
+$('map').onpointerup = $('map').onpointercancel = () => { drag = null; };
+for (const b of document.querySelectorAll('[data-opt]')) {
+  b.setAttribute('aria-pressed', opt[b.dataset.opt]);
+  b.onclick = () => { b.setAttribute('aria-pressed', opt[b.dataset.opt] = !opt[b.dataset.opt]); localStorage.mapOpt = JSON.stringify(opt); };
+}
+
 // ---- playback ----
 
 function setPlaying(on) {
   playing = on;
-  $('play').textContent = on ? 'Pause' : 'Play';
+  $('play').ariaLabel = on ? 'Pause' : 'Play';
+  $('play').classList.toggle('on', on); // the icon is drawn in CSS
 }
 
 let last = 0, lastPanel = 0;
 function frame(now) {
   requestAnimationFrame(frame);
+  for (const m of menus) m.show(); // a value set by the code shows at once
   const dt = Math.min(now - last, 100); // a background tab must not jump the race ahead
   last = now;
   if (!S || S.t === undefined) return;
@@ -624,10 +1005,100 @@ function frame(now) {
 $('play').onclick = () => { if (S) setPlaying(!playing); };
 $('seek').oninput = e => { if (S) S.t = S.t0 + e.target.value * 1000; };
 $('live').onclick = loadLive;
+// The races scroll sideways with the mouse wheel anywhere on the header (there is no scroll bar).
+document.querySelector('header').addEventListener('wheel', e => {
+  if (!e.deltaY || e.ctrlKey) return; // sideways swipes already scroll it; ctrl+wheel is zoom
+  $('races').scrollLeft += e.deltaY;
+  e.preventDefault();
+}, { passive: false });
+
+// ---- team radio ----
+// A radio row is its own player: its button plays and pauses, and a line along the row shows how far the clip is.
+const audio = $('audio'), secs = v => `0:${String(Math.floor(v)).padStart(2, '0')}`;
+let clipUrl = null;
 $('radio').onclick = e => {
   const url = e.target.dataset?.url;
-  if (url) { $('audio').src = url; $('audio').play(); }
+  if (!url) return;
+  if (url !== clipUrl) { clipUrl = url; audio.src = url; }
+  if (audio.paused) audio.play().catch(() => {}); else audio.pause(); // a clip that cannot load shows as "unavailable"
 };
+// Puts the clip's state on its row. The row is looked up each time: the list is rebuilt as messages arrive.
+function showClip() {
+  for (const li of $('radio').children) {
+    const b = li.firstChild, mine = b.dataset.url === clipUrl, on = mine && !audio.paused && !audio.ended;
+    b.classList.toggle('on', on);
+    b.ariaLabel = `${on ? 'Pause' : 'Play'} radio from ${li.querySelector('b').textContent}`;
+    li.classList.toggle('on', mine && (on || audio.currentTime > 0));
+    if (!mine) continue;
+    li.querySelector('i').style.width = `${100 * audio.currentTime / (audio.duration || 1)}%`;
+    li.querySelector('.len').textContent = audio.error ? 'unavailable' : audio.duration ? `${secs(audio.currentTime)} / ${secs(audio.duration)}` : '';
+  }
+}
+for (const ev of ['play', 'pause', 'ended', 'timeupdate', 'loadedmetadata', 'error']) audio.addEventListener(ev, showClip);
+
+// ---- radio transcripts ----
+// Nobody publishes what is said, so each clip is put through a speech model (Whisper, run in this browser by
+// transformers.js, in a worker so the map keeps moving). F1's server does not let a web page read its audio,
+// so the clip comes through server.mjs: without that server there are no transcripts. Results are kept in localStorage.
+// shortcut: the small English model (77 MB, fetched once) gets words wrong on noisy radio; a bigger model or a hosted one is more accurate.
+const HEAR = `import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2';
+  const model = pipeline('automatic-speech-recognition', 'Xenova/whisper-base.en', { dtype: 'q8' });
+  model.then(() => postMessage({ ready: true }), e => postMessage({ error: String(e) }));
+  onmessage = async e => {
+    try { postMessage({ url: e.data.url, text: (await (await model)(e.data.audio)).text }); }
+    catch (err) { postMessage({ url: e.data.url, error: String(err) }); }
+  };`;
+const said = {}, waiting = []; // said: clip address -> text ('' if it could not be made out); waiting: clips still to do
+let served = false, ears = null, modelReady = false, hearing = null;
+
+// The words of a clip, or a note while they are being worked out. t: when it was said (the newest clip goes first).
+function hear(url, t) {
+  if (said[url] === undefined) try { said[url] = localStorage.getItem(`said:${url}`) ?? undefined; } catch {} // storage can be blocked
+  if (said[url] !== undefined) return said[url];
+  if (!served) return '';
+  if (hearing !== url && !waiting.some(w => w.url === url)) waiting.push({ url, t });
+  if (!hearing) next();
+  return hearing !== url ? '' : modelReady ? 'Transcribing…' : 'Getting the speech model (77 MB, first time only)…';
+}
+const redraw = () => { if (S) S.shown.radio = -1; }; // the radio list is rebuilt on the next render
+
+async function next() {
+  const job = waiting.sort((a, b) => a.t - b.t).pop();
+  if (!job) return;
+  hearing = job.url;
+  redraw();
+  try {
+    if (!ears) {
+      ears = new Worker(URL.createObjectURL(new Blob([HEAR], { type: 'text/javascript' })), { type: 'module' });
+      ears.addEventListener('message', e => { if (e.data.ready) { modelReady = true; redraw(); } });
+    }
+    const r = await fetch(`radio?u=${encodeURIComponent(job.url)}`);
+    if (!r.ok) throw new Error(`the clip answered ${r.status}`);
+    // Decoding into a 16 kHz context re-samples the clip to what the model expects.
+    const sound = (await new OfflineAudioContext(1, 1, 16000).decodeAudioData(await r.arrayBuffer())).getChannelData(0);
+    const text = await new Promise((done, fail) => {
+      const on = e => {
+        if (e.data.url !== job.url && !(e.data.error && !e.data.url)) return; // not this clip, and not the model failing to load
+        ears.removeEventListener('message', on);
+        e.data.error ? fail(new Error(e.data.error)) : done(e.data.text);
+      };
+      ears.addEventListener('message', on);
+      ears.postMessage({ url: job.url, audio: sound }, [sound.buffer]);
+    });
+    said[job.url] = tidy(text);
+    try { localStorage.setItem(`said:${job.url}`, said[job.url]); } catch {}
+  } catch (e) {
+    console.warn(`No transcript for ${job.url}: ${e.message}`);
+    said[job.url] = ''; // not stored: it is tried again on the next visit
+  }
+  hearing = null;
+  redraw();
+  next();
+}
+// The model writes sounds as [BLANK_AUDIO], (engine revving) and the like, and a lone "you" for a clip with no
+// speech in it: only real speech is kept.
+const tidy = text => text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(you)?[.!?]*$/i, '');
+
 // Watch an overtake: jump to 10 s before it, zoom in on the two cars and play at half speed.
 $('ot').onclick = e => {
   const o = S?.overtakes[e.target.dataset?.ot];
@@ -641,6 +1112,29 @@ $('ot').onclick = e => {
 
 // Self-checks of the logic that is easy to get wrong.
 console.assert(idx([{ t: 1 }, { t: 5 }], 0) === -1 && idx([{ t: 1 }, { t: 5 }], 5) === 1 && idx([], 3) === -1, 'idx');
+console.assert(keep('laps?session_key=9') && keep('sessions?year=2023&session_type=Race') && !keep(`sessions?year=${new Date().getFullYear()}`), 'keep');
+{ // zooming in on a point leaves that point where it was on screen: screen = world * z + offset
+  const v = { z: 2, x: 30, y: -10 }, m = [100, 50], n = zoomAt(v, m, 5), world = (m[0] - v.x) / v.z;
+  console.assert(Math.abs(world * n.z + n.x - m[0]) < 1e-9 && Math.abs(zoomAt(n, m, 2).x - v.x) < 1e-9, 'zoomAt');
+}
+console.assert(lapTime(92.41) === '1:32.410' && lapTime(59.9996) === '1:00.000', 'lapTime');
+{ // a circle of 100 m radius driven anticlockwise: the left edge is inside it, the right edge WIDTH further out
+  const ring = Array.from({ length: 200 }, (_, i) => ({ x: 1000 * Math.cos(i * Math.PI / 100), y: 1000 * Math.sin(i * Math.PI / 100) }));
+  const [l, r] = road(ring).edges, rad = p => Math.hypot(p[0], p[1]);
+  console.assert(Math.abs(l.length - 126) < 3 && l.every((p, i) => rad(p) < 1000 && Math.abs(rad(r[i]) - rad(p) - WIDTH) < 1), 'road');
+}
+{ // a lopsided loop in metres, turned by 1 radian, moved and started elsewhere, must be found again
+  const egg = Array.from({ length: 300 }, (_, i) => { const a = i * Math.PI / 150, r = 300 + 120 * Math.cos(a) + 60 * Math.sin(2 * a); return [r * Math.cos(a), r * Math.sin(a)]; });
+  const ours = egg.map(([x, y]) => [5000 + 10 * (x * Math.cos(1) - y * Math.sin(1)), -2000 + 10 * (x * Math.sin(1) + y * Math.cos(1))]);
+  const { move, err } = align([...ours.slice(100), ...ours.slice(0, 100)], egg), at0 = move(egg[0]);
+  console.assert(err < 20 && Math.hypot(at0[0] - ours[0][0], at0[1] - ours[0][1]) < 20, 'fit');
+}
+console.assert(tidy(' [BLANK_AUDIO] Box, box. (engine) ') === 'Box, box.' && tidy(' you') === '' && tidy('You are P3.') === 'You are P3.', 'tidy');
+{ // a car at a steady 1 unit/ms, sampled unevenly, stays exactly on time once smoothed; a 5 s silence leaves a hole
+  const even = smooth([0, 150, 500, 800, 1000], [0, 150, 500, 800, 1000], [0, 0, 0, 0, 0]);
+  const hole = smooth([0, 300, 5300, 5600], [0, 300, 5300, 5600], [0, 0, 0, 0]);
+  console.assert(even.x.length === 11 && even.x.every((v, g) => Math.abs(v - g * 100) < 1e-6) && hole.x[20] !== hole.x[20] && hole.x[56] === 5600, 'smooth');
+}
 console.assert(rejoin(0, 20, [5, 19.9, 20.1, Infinity]) === 3 && rejoin(10, 20, [0, 40]) === 2, 'rejoin');
 console.assert(parseGap('+1.234') === 1.234 && parseGap('LAP 12') === 0 && parseGap('1L') === '1L', 'parseGap');
 { // 4 mini-sectors a lap: a repeat is dropped, a step back starts a new lap, and timing is learnt from clean laps
@@ -654,5 +1148,5 @@ console.assert(parseGap('+1.234') === 1.234 && parseGap('LAP 12') === 0 && parse
 
 requestAnimationFrame(frame);
 showYear(new Date().getFullYear());
-// The Live button only exists when the page is served by server.mjs.
-fetch('live?since=999999999').then(r => { $('live').hidden = !r.ok; }, () => {});
+// The Live button and radio transcripts only exist when the page is served by server.mjs.
+fetch('live?since=999999999').then(r => { $('live').hidden = !r.ok; served = r.ok; redraw(); }, () => {});
