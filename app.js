@@ -126,6 +126,7 @@ function blank() {
   tab('timing'); // the next race may have no overtakes or standings to show
   setView({ z: 1, x: 0, y: 0 });
   fit($('map')); // wipes the last session's map
+  window.draw3d?.(); // and the 3D one: with no session it draws an empty sky
   $('rc').textContent = $('radio').textContent = $('ot').textContent = '';
   audio.pause();
 }
@@ -544,7 +545,6 @@ function draw() {
   if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
 
   // An overtake close-up follows the two cars; otherwise the whole track is shown.
-  if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; }
   const duo = S.focus ? [S.focus.a, S.focus.b] : [];
   const [p, q] = duo.map(n => carXY(n, S.t));
   const zoom = p && q;
@@ -722,6 +722,7 @@ function render() {
       ? `P${rejoin(num(n), S.pitLoss, ord.filter(o => o.n !== n).map(o => num(o.n)))}` : '';
     const dnf = gone(n, t) && (S.out[n].dns ? 'DNS' : 'DNF');
     (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
+    rows[n].dataset.n = n; // map3d.js follows the car whose row is clicked
     rows[n].innerHTML = dnf ? `<td></td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td>` +
       `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
   }
@@ -944,7 +945,7 @@ for (const ev of ['pointerdown', 'focusin']) document.addEventListener(ev, e => 
 
 // ---- map view: zoom, pan, and what is drawn on it ----
 const view = { z: 1, x: 0, y: 0 }; // z: 1 shows the whole track; x, y: how far it is dragged, in pixels
-const opt = { sectors: false, names: true, ...JSON.parse(localStorage.mapOpt ?? '{}') };
+const opt = { sectors: false, names: true, three: false, ...JSON.parse(localStorage.mapOpt ?? '{}') };
 // The view at zoom z2 that keeps the point m (pixels from the middle of the map) where it is.
 const zoomAt = (v, m, z2) => ({ z: z2, x: m[0] - (m[0] - v.x) * z2 / v.z, y: m[1] - (m[1] - v.y) * z2 / v.z });
 function setView(v) {
@@ -998,7 +999,11 @@ function frame(now) {
   const i = Math.floor((S.t - S.t0) / CHUNK);
   chunk(i);
   if (playing) chunk(i + 1);
-  draw();
+  if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; } // an overtake close-up is over, on either map
+  const three = !!(opt.three && window.draw3d); // map3d.js sets draw3d only if WebGL and three.js loaded
+  if (!three && $('map').hidden) setView(view); // back from 3D: the zoom buttons are the flat map's again
+  $('map').hidden = three; $('map3d').hidden = !three;
+  if (three) draw3d(); else draw();
   if (now - lastPanel > 250) { lastPanel = now; render(); }
 }
 
@@ -1107,7 +1112,7 @@ $('ot').onclick = e => {
   S.t = S.focus.from;
   $('speed').value = '0.5';
   setPlaying(true);
-  $('map').scrollIntoView({ block: 'nearest' });
+  $('stage').scrollIntoView({ block: 'nearest' }); // whichever map is showing
 };
 
 // Self-checks of the logic that is easy to get wrong.

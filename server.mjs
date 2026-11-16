@@ -9,7 +9,7 @@ const HUB = 'livetiming.formula1.com/signalrcore';
 // SessionInfo first: it names the session, and nothing is recorded before it.
 const TOPICS = ['SessionInfo', 'SessionData', 'DriverList', 'LapCount', 'TimingData', 'TimingAppData',
   'RaceControlMessages', 'TeamRadio', 'PitLaneTimeCollection'];
-const FILES = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'] };
+const FILES = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/map3d.js': ['map3d.js', 'text/javascript'] };
 const dir = new URL('./recordings/', import.meta.url);
 mkdirSync(dir, { recursive: true });
 

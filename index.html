@@ -80,13 +80,18 @@
   /* The map is the page; the lap counter floats on it and the playback bar is docked along its bottom edge. */
   #stage { position: relative; min-height: max(60vh, 22rem); overflow: hidden; }
   canvas { display: block; width: 100%; }
-  #map { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
+  #map, #map3d { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
   #head { position: absolute; top: 1rem; left: 1.25rem; right: 5.75rem; /* clear of #tools */ display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; pointer-events: none; }
   #lap { font-size: 1.75rem; font-weight: 600; line-height: 1.1; margin-right: .35rem; font-variant-numeric: tabular-nums; }
   .chip { padding: .1rem .55rem; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); } /* square: a flag is a rectangle */
   .chip.yellow { background: var(--yellow); } .chip.red { background: var(--red); color: #fff; } .chip.sc { background: var(--orange); } .chip.end { background: #fff; }
   /* Zoom and what the map shows, down its right edge. */
   #tools { position: absolute; top: 1rem; right: .75rem; display: grid; gap: .25rem; justify-items: end; }
+  #cam3 { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .25rem; pointer-events: auto; } /* a row of its own under the lap counter and flags */
+  #cam { display: flex; gap: .25rem; }
+  main:has(#map3d:not([hidden])) #tower tr { cursor: pointer; } /* in 3D a click on a driver follows that car */
+  #cam button[aria-pressed=true] { background: var(--text); color: #000; }
+  #map3d[hidden] ~ #head #cam3 { display: none; } /* #head itself is hidden while a race loads */ /* the camera controls belong to the 3D map */
   #tools button { min-width: 2.25rem; }
   #tools button[aria-pressed=true] { background: var(--text); color: #000; }
   #tools button[aria-pressed] { margin-top: .5rem; }
@@ -161,18 +166,19 @@
 <main id="main">
   <section id="stage" class="empty" aria-label="Track">
     <canvas id="map" aria-label="Track map with car positions"></canvas>
-    <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span></div>
+    <canvas id="map3d" aria-label="3D track map with car positions" hidden></canvas>
+    <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span><div id="cam3"><nav id="cam" aria-label="Camera"></nav><select id="follow" aria-label="Car to follow"></select></div></div>
     <div id="loading"><span id="loadText">Loading races…</span><div class="prog"><i id="loadBar"></i></div></div>
     <div id="tools">
       <button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button>
-      <button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
+      <button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
     </div>
     <div id="controls">
       <button id="play" class="pp" aria-label="Play"></button>
       <input id="seek" type="range" min="0" step="1" value="0" aria-label="Race time">
       <output id="clock"></output>
       <select id="speed" aria-label="Playback speed">
-        <option value="0.5">0.5x</option><option value="1">1x</option><option value="5">5x</option><option value="20" selected>20x</option><option value="60">60x</option>
+        <option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="5">5x</option><option value="20">20x</option><option value="60">60x</option>
       </select>
     </div>
   </section>
@@ -218,6 +224,8 @@
     </div>
   </div>
 </main>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }</script>
 <script src="app.js"></script>
+<script type="module" src="map3d.js"></script>
 </body>
 </html>
