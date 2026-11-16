@@ -95,5 +95,5 @@ assigned to each circuit, and how the 3D toggle is drawn.
 
 - The feed's height is noisy and has occasional dropouts; heavy smoothing may flatten short crests.
 - Surveyed track widths exist for 17 circuits; elsewhere the road is an estimated 12 m band.
-- Cockpit view at 20x or 60x playback will be uncomfortable; no speed change is forced.
+- Playback now defaults to 1x (user's call). Cockpit view at 20x or 60x will be uncomfortable; no speed change is forced.
 - Phone performance is unmeasured.
