@@ -91,7 +91,7 @@
   #cam { display: flex; gap: .25rem; }
   main:has(#map3d:not([hidden])) #tower tr { cursor: pointer; } /* in 3D a click on a driver follows that car */
   #cam button[aria-pressed=true] { background: var(--text); color: #000; }
-  #map3d[hidden] ~ #head #cam3 { display: none; } /* the camera controls belong to the 3D map */
+  #map3d[hidden] ~ #head #cam3 { display: none; } /* #head itself is hidden while a race loads */ /* the camera controls belong to the 3D map */
   #tools button { min-width: 2.25rem; }
   #tools button[aria-pressed=true] { background: var(--text); color: #000; }
   #tools button[aria-pressed] { margin-top: .5rem; }

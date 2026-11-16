@@ -545,7 +545,6 @@ function draw() {
   if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
 
   // An overtake close-up follows the two cars; otherwise the whole track is shown.
-  if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; }
   const duo = S.focus ? [S.focus.a, S.focus.b] : [];
   const [p, q] = duo.map(n => carXY(n, S.t));
   const zoom = p && q;
@@ -1000,6 +999,7 @@ function frame(now) {
   const i = Math.floor((S.t - S.t0) / CHUNK);
   chunk(i);
   if (playing) chunk(i + 1);
+  if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; } // an overtake close-up is over, on either map
   const three = !!(opt.three && window.draw3d); // map3d.js sets draw3d only if WebGL and three.js loaded
   if (!three && $('map').hidden) setView(view); // back from 3D: the zoom buttons are the flat map's again
   $('map').hidden = three; $('map3d').hidden = !three;
@@ -1112,7 +1112,7 @@ $('ot').onclick = e => {
   S.t = S.focus.from;
   $('speed').value = '0.5';
   setPlaying(true);
-  $('map').scrollIntoView({ block: 'nearest' });
+  $('stage').scrollIntoView({ block: 'nearest' }); // whichever map is showing
 };
 
 // Self-checks of the logic that is easy to get wrong.

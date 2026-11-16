@@ -79,6 +79,7 @@ scene.add(world, sky, sun);
 const orbit = new OrbitControls(camera, canvas);
 orbit.maxPolarAngle = 1.45; // never under the ground
 orbit.enableDamping = true;
+orbit.minDistance = 20; orbit.maxDistance = 15000; // further out, the world would fall behind the camera's far limit
 
 const CUBE = new THREE.BoxGeometry(1, 1, 1); // every block in the world is this cube, stretched
 const V = (x, y, z) => new THREE.Vector3(x / 10, z / 10, -y / 10); // from app.js's x, y and a height, to the scene
@@ -253,7 +254,8 @@ function place(t) {
 // ---- cameras ----
 
 const cam = { mode: 'overview', n: null }; // n: the car being followed
-let lost = 0, look = 0, then = 0;          // lost: when the followed car was last seen; look: where the cockpit camera points
+let lost = 0, look = 0, then = 0, held = null; // held: the user's own overview, kept while an overtake close-up borrows the camera
+// lost: when the followed car was last seen; look: where the cockpit camera points
 
 function setCam(mode, n = cam.n) {
   if (mode !== 'overview' && !n) return;
@@ -274,9 +276,10 @@ function aim(now) {
     const duo = S.focus && [S.focus.a, S.focus.b].map(n => cars[n]?.visible && cars[n].position);
     if (duo?.[0] && duo[1]) {
       const mid = duo[0].clone().lerp(duo[1], 0.5), far = Math.max(120, 1.4 * duo[0].distanceTo(duo[1]));
+      held ??= [orbit.target.clone(), camera.position.clone()];
       orbit.target.copy(mid);
       camera.position.copy(mid).add(new THREE.Vector3(0, far * 0.8, far * 0.6));
-    }
+    } else if (held && !S.focus) { orbit.target.copy(held[0]); camera.position.copy(held[1]); held = null; }
     return orbit.update();
   }
   const at = pose(cam.n, S.t);
@@ -307,11 +310,12 @@ function draw3d() {
     if (S.road?.of !== S.track) { S.road = road(S.track); survey(S); } // as draw() does: estimated now, surveyed a moment later
     if (S.road !== built) {
       // A new race, or better edges for this one: everything is thrown away and built again.
-      world.traverse(o => { if (o.geometry && o.geometry !== CUBE) o.geometry.dispose(); for (const m of [o.material].flat()) if (m && m !== DARK && m !== WHITE) { m.map?.dispose(); m.emissiveMap?.dispose(); m.dispose(); } });
+      world.traverse(o => { o.dispose?.(); if (o.geometry && o.geometry !== CUBE) o.geometry.dispose(); // dispose(): an instanced mesh's own buffers
+        for (const m of [o.material].flat()) if (m && m !== DARK && m !== WHITE) { m.map?.dispose(); m.emissiveMap?.dispose(); m.dispose(); } });
       world.clear();
       for (const n in cars) delete cars[n];
       const keep = built?.of === S.track && [orbit.target.clone(), camera.position.clone()];
-      built = S.road;
+      built = S.road; held = null;
       build();
       if (keep) { orbit.target.copy(keep[0]); camera.position.copy(keep[1]); } // same race: the view stays where the user put it
       else {
