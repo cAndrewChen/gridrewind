@@ -43,18 +43,19 @@
 
   /* Phone: the map, then one panel at a time under it. Desktop: the panel on the left, the map filling the rest of the window. */
   #side { min-width: 0; }
-  #tabs { overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); padding: 0 .5rem; }
+  #tabs { overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); padding: 0 .5rem; justify-content: space-between; font-stretch: 84%; }
+  #tabs button { padding-inline: .5rem; }
   #tabs::-webkit-scrollbar { display: none; }
   #side:has(#timing[hidden]) #tabs,
   #side:has(#rcBox[hidden]) [data-tab=rc], #side:has(#radioBox[hidden]) [data-tab=radio], #side:has(#otBox[hidden]) [data-tab=ot],
-  #side:has(#more[hidden]) [data-tab=laps], #side:has(#champ[hidden]) [data-tab=champ] { display: none; }
+  #side:has(#more[hidden]) :is([data-tab=laps], [data-tab=pits]), #side:has(#champ[hidden]) [data-tab=champ] { display: none; }
   #more { display: contents; }
   .panel { display: none; padding: .75rem 1.25rem 2rem; }
   .panel.cur { display: block; }
   @media (min-width: 60rem) {
     body { height: 100dvh; display: flex; flex-direction: column; }
     header { position: static; }
-    main { flex: 1; min-height: 0; display: grid; grid-template-columns: 27rem minmax(0, 1fr); }
+    main { flex: 1; min-height: 0; display: grid; grid-template-columns: 30rem minmax(0, 1fr); }
     #side { order: -1; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
     #panels { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fill2) transparent; }
     #stage { min-height: 0; }
@@ -80,17 +81,24 @@
   h2 ~ h2 { margin-top: 1.75rem; }
   .note { margin: 0 0 .5rem; color: var(--dim); font-size: .8125rem; }
   .note:empty { display: none; }
+  #pitloss { margin: 0 0 1.5rem; font-size: 1.0625rem; font-weight: 600; }
+  #pitloss:empty { display: none; }
 
   /* The lap counter and the map tools sit on the map; the playback bar runs along its bottom edge. */
   #stage { position: relative; min-height: max(60vh, 22rem); overflow: hidden; }
   canvas { display: block; width: 100%; }
-  #map { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
+  #map, #map3d { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
   #head { position: absolute; top: 1rem; left: 1.25rem; right: 5.75rem; /* clear of #tools */ display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; pointer-events: none; }
   #lap { font-size: 2.25rem; font-weight: 800; font-stretch: 125%; letter-spacing: -.025em; line-height: 1.1; margin-right: .5rem; font-variant-numeric: tabular-nums; }
   .chip { padding: .15rem .6rem; border-radius: .1875rem; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); }
   .chip.yellow { background: var(--yellow); } .chip.red { background: var(--red); color: #fff; } .chip.sc { background: var(--orange); } .chip.end { background: #fff; }
   /* Zoom and what the map shows, down its right edge. */
   #tools { position: absolute; top: 1rem; right: 1rem; display: grid; gap: .3rem; justify-items: end; }
+  #cam3 { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .25rem; pointer-events: auto; } /* a row of its own under the lap counter and flags */
+  #cam { display: flex; gap: .25rem; }
+  main:has(#map3d:not([hidden])) #tower tr { cursor: pointer; } /* in 3D a click on a driver follows that car */
+  #cam button[aria-pressed=true] { background: var(--text); color: #000; }
+  #map3d[hidden] ~ #head #cam3 { display: none; } /* #head itself is hidden while a race loads */ /* the camera controls belong to the 3D map */
   #tools button { min-width: 2.25rem; }
   #tools button[aria-pressed=true] { background: var(--text); color: #000; }
   #tools button[aria-pressed] { margin-top: .5rem; }
@@ -120,7 +128,15 @@
   #seek::-moz-range-thumb { width: .875rem; height: .875rem; border: 0; border-radius: 50%; background: #fff; }
   #clock { font-variant-numeric: tabular-nums; min-width: 4.5em; text-align: right; font-weight: 600; }
 
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-stretch: 88%; }
+  /* Every column has a set width, so nothing shifts as the numbers change. The first row sets them. */
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; font-stretch: 88%; }
+  #timing th:nth-child(1) { width: 2.5rem; } #timing th:nth-child(2) { width: 5rem; } #timing th:nth-child(3), #timing th:nth-child(4) { width: 4.75rem; }
+  #timing th:nth-child(5) { width: 3.75rem; } #timing th:nth-child(6) { width: 3rem; } #timing th:nth-child(7) { width: 3.5rem; }
+  #timing :is(th, td):nth-child(5) { padding-left: .75rem; }
+  #laps th.n { width: 4.25rem; }
+  #champ td:first-child { width: 2.5rem; } #champ td.n { width: 4rem; }
+  #wear td:nth-child(2) { width: 2.5rem; } #wear td:nth-child(3) { width: 6rem; } #wear td:nth-child(4) { width: 4rem; } #wear td:nth-child(5) { width: 6.5rem; }
+  td { overflow: hidden; text-overflow: ellipsis; }
   th { text-align: left; color: var(--dim); font-weight: 400; font-size: .8125rem; }
   td, th { padding: .5rem .35rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
   tr:last-child td { border-bottom: 0; }
@@ -136,6 +152,14 @@
   .bar { display: inline-block; width: .25rem; height: 1em; border-radius: 99px; vertical-align: -.12em; margin-right: .5rem; }
   .tyre { display: inline-grid; place-items: center; width: 1.6em; height: 1.6em; border: 2px solid; border-radius: 50%; font-size: .6875rem; font-weight: 700; vertical-align: 1px; }
 
+  /* Lap times as a line; a slow lap (a stop, a safety car) is cut off at the top so the racing laps keep their shape. */
+  #pitChart { display: block; width: 100%; height: auto; margin-top: .75rem; font-size: 11px; font-variant-numeric: tabular-nums; overflow: visible; }
+  #pitChart text { fill: var(--dim); }
+  #pitChart .grid { stroke: var(--line); }
+  #pitChart .stop { stroke: var(--dim); stroke-dasharray: 2 3; }
+  #pitChart polyline { fill: none; stroke-width: 1.75; stroke-linejoin: round; }
+  #pitText { margin: .6rem 0 0; color: var(--dim); }
+  #pitText:empty { display: none; }
   #cmpPick { display: flex; gap: .5rem; align-items: center; color: var(--dim); margin-top: .5rem; }
   #cmpText { margin: .6rem 0 0; }
   #cmpText:empty { display: none; }
@@ -162,6 +186,10 @@
     .panel { padding-inline: .75rem; }
     #lap { font-size: 1.5rem; }
     td, th { padding-inline: .2rem; }
+    #timing th:nth-child(1) { width: 2rem; } #timing th:nth-child(2) { width: 4rem; } #timing th:nth-child(3), #timing th:nth-child(4) { width: 3.75rem; }
+    #timing th:nth-child(5) { width: 3.1rem; } #timing th:nth-child(6) { width: 2.4rem; } #timing th:nth-child(7) { width: 2.75rem; }
+    #timing :is(th, td):nth-child(5) { padding-left: .5rem; }
+    #tower td:nth-child(2) { padding-left: .5rem; font-size: 1rem; }
     #laps :is(th, td):nth-child(2) { display: none; } /* four laps fit a phone, five do not */
   }
   @media (pointer: coarse) { button, select { min-height: 2.75rem; } li button { min-height: 2.25rem; } .pp { min-height: 0; } #radio .pp { --s: 1; } } /* play buttons stay round */
@@ -177,28 +205,28 @@
 <main id="main">
   <section id="stage" class="empty" aria-label="Track">
     <canvas id="map" aria-label="Track map with car positions"></canvas>
-    <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span></div>
+    <canvas id="map3d" aria-label="3D track map with car positions" hidden></canvas>
+    <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span><div id="cam3"><nav id="cam" aria-label="Camera"></nav><select id="follow" aria-label="Car to follow"></select></div></div>
     <div id="loading"><span id="loadText">Loading races…</span><div class="prog"><i id="loadBar"></i></div></div>
     <div id="tools">
       <button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button>
-      <button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
+      <button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
     </div>
     <div id="controls">
       <button id="play" class="pp" aria-label="Play"></button>
       <input id="seek" type="range" min="0" step="1" value="0" aria-label="Race time">
       <output id="clock"></output>
       <select id="speed" aria-label="Playback speed">
-        <option value="0.5">0.5x</option><option value="1">1x</option><option value="5">5x</option><option value="20" selected>20x</option><option value="60">60x</option>
+        <option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="5">5x</option><option value="20">20x</option><option value="60">60x</option>
       </select>
     </div>
   </section>
   <div id="side">
     <nav id="tabs" aria-label="Panel">
-      <button data-tab="timing" aria-pressed="true">Timing</button><button data-tab="rc" aria-pressed="false">Race control</button><button data-tab="radio" aria-pressed="false">Radio</button><button data-tab="ot" aria-pressed="false">Overtakes</button><button data-tab="laps" aria-pressed="false">Laps</button><button data-tab="champ" aria-pressed="false">Standings</button>
+      <button data-tab="timing" aria-pressed="true">Timing</button><button data-tab="rc" aria-pressed="false">Race control</button><button data-tab="radio" aria-pressed="false">Radio</button><button data-tab="ot" aria-pressed="false">Overtakes</button><button data-tab="laps" aria-pressed="false">Laps</button><button data-tab="pits" aria-pressed="false">Pit stops</button><button data-tab="champ" aria-pressed="false">Standings</button>
     </nav>
     <div id="panels">
       <section id="timing" class="panel cur" data-p="timing" aria-label="Timing" hidden>
-        <p class="note" id="pitloss"></p>
         <table>
           <thead><tr><th>P</th><th>Driver</th><th class="n">Gap</th><th class="n">Int</th><th>Tyre</th><th class="n">Stops</th><th class="n" title="Position after a pit stop made right now">If pits</th></tr></thead>
           <tbody id="tower"></tbody>
@@ -224,6 +252,14 @@
           <p class="note">Time lost per lap as the tyres age, with the fuel load taken out.</p>
           <table><tbody id="wear"></tbody></table>
         </section>
+        <section class="panel" data-p="pits" aria-label="Pit stops">
+          <p id="pitloss"></p>
+          <h2>Lap times</h2>
+          <p class="note">Dashed lines are pit stops, marked with the tyre fitted.</p>
+          <select id="pitWho" aria-label="Driver"></select>
+          <p id="pitText"></p>
+          <svg id="pitChart" viewBox="0 0 440 200" role="img"></svg>
+        </section>
         <section id="champ" class="panel" data-p="champ" aria-label="Standings" hidden>
           <nav id="champNav" class="sub" aria-label="Championship"><button value="D" aria-pressed="true">Drivers</button><button value="T" aria-pressed="false">Constructors</button></nav>
           <p class="note">As it stands at this point in the race.</p>
@@ -234,6 +270,8 @@
     </div>
   </div>
 </main>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }</script>
 <script src="app.js"></script>
+<script type="module" src="map3d.js"></script>
 </body>
 </html>

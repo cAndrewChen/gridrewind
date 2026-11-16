@@ -126,6 +126,7 @@ function blank() {
   tab('timing'); // the next race may have no overtakes or standings to show
   setView({ z: 1, x: 0, y: 0 });
   fit($('map')); // wipes the last session's map
+  window.draw3d?.(); // and the 3D one: with no session it draws an empty sky
   $('rc').textContent = $('radio').textContent = $('ot').textContent = '';
   audio.pause();
 }
@@ -550,7 +551,6 @@ function draw() {
   if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
 
   // An overtake close-up follows the two cars; otherwise the whole track is shown.
-  if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; }
   const duo = S.focus ? [S.focus.a, S.focus.b] : [];
   const [p, q] = duo.map(n => carXY(n, S.t));
   const zoom = p && q;
@@ -657,7 +657,7 @@ function lapTimes(n, t) {
 function renderCompare(t, ord) {
   if (S.shown.cmp !== ord.length) { // fill the driver pickers; keep a choice that still exists
     S.shown.cmp = ord.length;
-    [['cmpA', ord[0].n], ['cmpB', (ord[1] ?? ord[0]).n], ['otWho', '']].forEach(([id, def]) => {
+    [['cmpA', ord[0].n], ['cmpB', (ord[1] ?? ord[0]).n], ['pitWho', ord[0].n], ['otWho', '']].forEach(([id, def]) => {
       const el = $(id), keep = el.value;
       el.innerHTML = (id === 'otWho' ? '<option value="">All drivers</option>' : '') + ord.map(o => `<option value="${esc(o.n)}">${esc(name(o.n))}</option>`).join('');
       el.value = S.drivers[keep] ? keep : def;
@@ -673,6 +673,29 @@ function renderCompare(t, ord) {
   $('wear').innerHTML = [...new Set([a, b])].flatMap(n => wear(n, t).map(r =>
     `<tr><td>${esc(name(n))}</td><td>${tyreTag(r.st.compound)}</td><td>from lap ${esc(r.st.lap_start)}</td><td class="n">${r.laps} laps</td>` +
     `<td class="n">${r.wear === undefined ? 'too few laps' : `${r.wear >= 0 ? '+' : ''}${r.wear.toFixed(2)} s/lap`}</td></tr>`)).join('');
+}
+
+// One driver's lap times so far as a line across the whole race distance, with a mark at each pit stop.
+// Redrawn only when a lap is added or the driver changes.
+function renderPits(t) {
+  const n = $('pitWho').value, laps = [...lapTimes(n, t)], key = `${n} ${laps.length}`; // [lap number, seconds]
+  if (S.shown.pits === key) return;
+  S.shown.pits = key;
+  $('pitText').textContent = laps.length < 2 ? 'No laps yet.' : '';
+  if (laps.length < 2) return void ($('pitChart').innerHTML = '');
+  const secs = laps.map(l => l[1]), lo = Math.min(...secs), hi = Math.max(lo + 1, Math.min(Math.max(...secs), median(secs) * 1.15));
+  const L = 52, R = 432, T = 22, B = 172, last = Math.max(S.totalLaps || 0, laps.at(-1)[0], 2);
+  const X = lap => L + (R - L) * (lap - 1) / (last - 1), Y = v => B - (B - T) * (Math.min(v, hi) - lo) / (hi - lo);
+  const stints = (S.stints[n] ?? []).filter(Boolean);
+  const stops = (S.pits[n] ?? []).filter(p => p.t <= t).map(p => at(S.laps[n], p.t)?.n).filter(Boolean).map(lap => {
+    const c = stints.find(st => st.lap_start > lap)?.compound;
+    return `<line class="stop" x1="${X(lap)}" x2="${X(lap)}" y1="${T}" y2="${B}"/><text x="${X(lap)}" y="${T - 8}" text-anchor="middle" style="fill:${TYRE[c] ?? ''}">${esc(c?.[0] ?? '')} L${lap}</text>`;
+  });
+  $('pitChart').ariaLabel = `Lap times of ${name(n)}`;
+  $('pitChart').innerHTML = `<line class="grid" x1="${L}" x2="${R}" y1="${T}" y2="${T}"/><line class="grid" x1="${L}" x2="${R}" y1="${B}" y2="${B}"/>` +
+    `<text x="${L - 8}" y="${T + 4}" text-anchor="end">${lapTime(hi).slice(0, -2)}</text><text x="${L - 8}" y="${B + 4}" text-anchor="end">${lapTime(lo).slice(0, -2)}</text>` +
+    `<text x="${L}" y="${B + 18}">Lap 1</text><text x="${R}" y="${B + 18}" text-anchor="end">${last}</text>` + stops.join('') +
+    `<polyline stroke="#${esc(S.drivers[n].team_colour || '999')}" points="${laps.map(l => `${X(l[0]).toFixed(1)},${Y(l[1]).toFixed(1)}`).join(' ')}"/>`;
 }
 
 function render() {
@@ -729,6 +752,7 @@ function render() {
     const dnf = gone(n, t) && (S.out[n].dns ? 'DNS' : 'DNF');
     (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
     rows[n].style.setProperty('--team', `#${d.team_colour || '999'}`);
+    rows[n].dataset.n = n; // map3d.js follows the car whose row is clicked
     rows[n].innerHTML = dnf ? `<td></td><td>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td>${esc(d.name_acronym)}</td>` +
       `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
   }
@@ -748,6 +772,7 @@ function render() {
   S.shown.at = t;
 
   renderCompare(t, ord);
+  renderPits(t);
 
   // Live standings: points before this session plus the points for the current position.
   if (S.champD.length) {
@@ -951,7 +976,7 @@ for (const ev of ['pointerdown', 'focusin']) document.addEventListener(ev, e => 
 
 // ---- map view: zoom, pan, and what is drawn on it ----
 const view = { z: 1, x: 0, y: 0 }; // z: 1 shows the whole track; x, y: how far it is dragged, in pixels
-const opt = { sectors: false, names: true, ...JSON.parse(localStorage.mapOpt ?? '{}') };
+const opt = { sectors: false, names: true, three: false, ...JSON.parse(localStorage.mapOpt ?? '{}') };
 // The view at zoom z2 that keeps the point m (pixels from the middle of the map) where it is.
 const zoomAt = (v, m, z2) => ({ z: z2, x: m[0] - (m[0] - v.x) * z2 / v.z, y: m[1] - (m[1] - v.y) * z2 / v.z });
 function setView(v) {
@@ -1006,7 +1031,11 @@ function frame(now) {
   chunk(i);
   if (playing) chunk(i + 1);
   $('seek').style.setProperty('--p', $('seek').value / ($('seek').max || 1)); // the filled part of the slider
-  draw();
+  if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; } // an overtake close-up is over, on either map
+  const three = !!(opt.three && window.draw3d); // map3d.js sets draw3d only if WebGL and three.js loaded
+  if (!three && $('map').hidden) setView(view); // back from 3D: the zoom buttons are the flat map's again
+  $('map').hidden = three; $('map3d').hidden = !three;
+  if (three) draw3d(); else draw();
   if (now - lastPanel > 250) { lastPanel = now; render(); }
 }
 
@@ -1115,7 +1144,7 @@ $('ot').onclick = e => {
   S.t = S.focus.from;
   $('speed').value = '0.5';
   setPlaying(true);
-  $('map').scrollIntoView({ block: 'nearest' });
+  $('stage').scrollIntoView({ block: 'nearest' }); // whichever map is showing
 };
 
 // Self-checks of the logic that is easy to get wrong.
