@@ -5,35 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>F1 Replay</title>
 <style>
-  /* The look is flat and quiet: one tarmac grey, no boxes, no shadows, so the only colour on the page
-     is colour that means something: a team, a tyre or a flag. Dark only, on purpose: team and tyre
-     colours (white hards, silver cars) are made for a dark background. */
-  /* One file, two voices: wide for the title and lap counter, narrow for the tables. */
+  /* The look is calm, after a live-scores app: a black page, two flat grey panels with soft corners (the map and
+     one panel of numbers), pill buttons, roomy rows and one green line under the current tab. Nothing shouts:
+     the lap counter is ordinary text and a team is a small bar of its colour. Dark only, on purpose: team and
+     tyre colours (white hards, silver cars) are made for a dark background. */
   @font-face { font-family: Archivo; src: url(archivo.woff2) format('woff2'); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
-  :root { color-scheme: dark; --bg: #17181a; --solid: #242528; --fill: #242528; --fill2: #34363a; --line: #2b2c30; --text: #f2f2f0; --dim: #8f9196;
+  :root { color-scheme: dark; --bg: #000; --card: #1a1a1a; --solid: #262626; --fill: #262626; --fill2: #383838; --line: #262626; --text: #f5f5f5; --dim: #9b9b9b; --accent: #5fdd6c; --road: #3d3d3d; --mid: rgba(255, 255, 255, .5); --dot: #1a1a1a; /* the last three are the map's: tarmac, racing line, the ring round a car */
     --green: #00d85a; --yellow: #ffe000; --red: #ff2d2d; --orange: #ff9a00; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; font: .9375rem/1.4 Archivo, system-ui, sans-serif; font-stretch: 94%; color: var(--text); background: var(--bg); }
+  body { margin: 0; font: .9375rem/1.4 Archivo, system-ui, sans-serif; color: var(--text); background: var(--bg); }
   :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
-  button, select { font: inherit; font-stretch: inherit; color: inherit; background: var(--fill); border: 0; border-radius: .375rem; padding: .4rem .8rem; cursor: pointer; white-space: nowrap; transition: transform .1s ease-out, background-color .15s; }
+  button, select { font: inherit; font-stretch: inherit; color: inherit; background: var(--fill); border: 0; border-radius: 99px; padding: .4rem .9rem; cursor: pointer; white-space: nowrap; transition: transform .1s ease-out, background-color .15s; }
   button:active:not(:disabled) { background: var(--fill2); transform: scale(.96); } /* answers on press, not on release */
   button:disabled { opacity: .35; cursor: default; }
 
-  /* Seasons, races and panel tabs are one kind of thing: plain words in a row, the current one white with a line under it. */
+  /* Seasons, races and panel tabs are one kind of thing: plain words in a row, the current one white with a green line under it. */
   nav { display: flex; }
   nav button { background: none; color: var(--dim); border-radius: 0; padding: .5rem .75rem; box-shadow: none; }
   nav button:hover:not(:disabled) { color: var(--text); }
   nav button:active:not(:disabled) { background: none; }
-  nav button[aria-pressed=true] { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px var(--text); }
+  nav button[aria-pressed=true] { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px var(--accent); }
 
-  header { position: sticky; top: 0; z-index: 2; padding: 1rem 1.25rem 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+  header { position: sticky; top: 0; z-index: 2; padding: 1rem 1.25rem .5rem; background: var(--bg); }
   #top { display: flex; gap: .5rem; align-items: center; min-height: 2rem; }
   #kind:empty { display: none; } /* Race or Sprint, on a weekend that has both */
-  #status { margin: 0; font-size: 1.375rem; font-weight: 700; font-stretch: 116%; letter-spacing: -.015em; line-height: 1.15; }
+  #status { margin: 0; font-size: 1.25rem; font-weight: 700; letter-spacing: -.01em; line-height: 1.15; }
   #live { flex: none; display: flex; gap: .45rem; align-items: center; font-weight: 600; margin-left: auto; }
-  #live::before { content: ''; width: .5rem; height: .5rem; border-radius: 50%; background: var(--red); }
+  #live:not(.on) { color: var(--dim); } #live:disabled { opacity: 1; } /* grey dot: no session on; red dot: live now */
+  #live::before { content: ''; width: .5rem; height: .5rem; border-radius: 50%; background: var(--dim); }
+  #live.on::before { background: var(--red); }
   #pick { display: flex; gap: 1rem; align-items: center; margin: .25rem -.75rem 0; }
   #years { flex: none; }
   /* The race row fades out at both ends, which says "there is more this way" without a divider. */
@@ -42,8 +44,9 @@
   #races::-webkit-scrollbar { display: none; }
 
   /* Phone: the map, then one panel at a time under it. Desktop: the panel on the left, the map filling the rest of the window. */
-  #side { min-width: 0; }
-  #tabs { overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); padding: 0 .5rem; justify-content: space-between; font-stretch: 84%; }
+  main { display: grid; gap: .75rem; padding: 0 .75rem .75rem; }
+  #side, #stage { min-width: 0; background: var(--card); border-radius: 1rem; }
+  #tabs { overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); padding: 0 .5rem; justify-content: space-between; font-stretch: 88%; }
   #tabs button { padding-inline: .5rem; }
   #tabs::-webkit-scrollbar { display: none; }
   #side:has(#timing[hidden]) #tabs,
@@ -56,23 +59,23 @@
     body { height: 100dvh; display: flex; flex-direction: column; }
     header { position: static; }
     main { flex: 1; min-height: 0; display: grid; grid-template-columns: 30rem minmax(0, 1fr); }
-    #side { order: -1; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+    #side { order: -1; display: flex; flex-direction: column; min-height: 0; }
     #panels { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fill2) transparent; }
     #stage { min-height: 0; }
   }
 
   .sub { margin: -.5rem -.75rem .5rem; } /* choices inside a panel */
   #otPick { display: flex; justify-content: space-between; align-items: start; gap: .5rem; }
-  #ot .key { font-weight: 600; box-shadow: inset 3px 0 var(--text); padding-left: .75rem; } /* a pass for a podium place */
+  #ot .key { font-weight: 600; } /* a pass for a podium place */
   #ot li:not(.key) { color: var(--dim); }
 
   /* A drop-down drawn by the page (menu() in app.js), so it looks the same in every browser. It grows out of the button that opened it. */
   .menu { position: relative; display: inline-block; }
   .menu > button::after { content: ''; display: inline-block; margin-left: .5rem; border: .28rem solid transparent; border-top-color: currentColor; border-bottom: 0; vertical-align: .12em; }
-  .menu > div { position: absolute; z-index: 3; top: calc(100% + .25rem); left: 0; min-width: 100%; max-height: 16rem; overflow-y: auto; display: grid; padding: .25rem; background: var(--solid); border: 1px solid var(--fill2); border-radius: .5rem; scrollbar-width: thin;
+  .menu > div { position: absolute; z-index: 3; top: calc(100% + .25rem); left: 0; min-width: 100%; max-height: 16rem; overflow-y: auto; display: grid; padding: .25rem; background: var(--solid); border-radius: .75rem; scrollbar-width: thin;
     transform-origin: top left; transition: opacity .16s, transform .16s cubic-bezier(.2, .9, .3, 1); }
   @starting-style { .menu > div { opacity: 0; transform: scale(.94); } }
-  .menu > div button { text-align: left; border-radius: .25rem; background: none; color: var(--dim); }
+  .menu > div button { text-align: left; border-radius: .5rem; background: none; color: var(--dim); }
   .menu > div button:hover, .menu > div button:focus-visible { background: var(--fill2); color: var(--text); }
   .menu > div button[aria-pressed=true] { color: var(--text); font-weight: 600; }
   #controls .menu > div { top: auto; bottom: calc(100% + .5rem); left: auto; right: 0; transform-origin: bottom right; }
@@ -88,26 +91,25 @@
   #stage { position: relative; min-height: max(60vh, 22rem); overflow: hidden; }
   canvas { display: block; width: 100%; }
   #map, #map3d { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
-  #head { position: absolute; top: 1rem; left: 1.25rem; right: 5.75rem; /* clear of #tools */ display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; pointer-events: none; }
-  #lap { font-size: 2.25rem; font-weight: 800; font-stretch: 125%; letter-spacing: -.025em; line-height: 1.1; margin-right: .5rem; font-variant-numeric: tabular-nums; }
-  .chip { padding: .15rem .6rem; border-radius: .1875rem; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); }
+  #head { position: absolute; top: 1rem; left: 1.25rem; right: 10.5rem; /* clear of #tools */ display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; pointer-events: none; }
+  #lap { font-size: 1.375rem; font-weight: 700; letter-spacing: -.01em; line-height: 1.1; margin-right: .5rem; font-variant-numeric: tabular-nums; }
+  .chip { padding: .15rem .7rem; border-radius: 99px; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); }
   .chip.yellow { background: var(--yellow); } .chip.red { background: var(--red); color: #fff; } .chip.sc { background: var(--orange); } .chip.end { background: #fff; }
-  /* Zoom and what the map shows, down its right edge. */
-  #tools { position: absolute; top: 1rem; right: 1rem; display: grid; gap: .3rem; justify-items: end; }
+  /* Zoom, and what the map shows: two small joined rows in its top right corner. */
+  #tools { position: absolute; top: 1rem; right: 1rem; display: grid; gap: .4rem; justify-items: end; }
+  #tools div { display: flex; gap: 1px; border-radius: 99px; overflow: hidden; }
   #cam3 { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .25rem; pointer-events: auto; } /* a row of its own under the lap counter and flags */
   #cam { display: flex; gap: .25rem; }
   /* Solid, like the map tools: the 3D ground and sky behind them can be any colour. */
-  #cam button { background: var(--fill); color: var(--text); border-radius: .375rem; padding: .4rem .8rem; box-shadow: none; font-weight: 400; }
+  #cam button { background: var(--fill); color: var(--text); border-radius: 99px; padding: .4rem .9rem; box-shadow: none; font-weight: 400; }
   #cam button:active:not(:disabled) { background: var(--fill2); }
   main:has(#map3d:not([hidden])) #lap { text-shadow: 0 1px .25rem rgba(0, 0, 0, .7); } /* white on a pale sky needs an edge */
   main:has(#map3d:not([hidden])) #tower tr { cursor: pointer; } /* in 3D a click on a driver follows that car */
   #cam button[aria-pressed=true] { background: var(--text); color: #000; }
   #map3d[hidden] ~ #head #cam3 { display: none; } /* #head itself is hidden while a race loads */ /* the camera controls belong to the 3D map */
-  #tools button { min-width: 2.25rem; }
+  #tools button { min-width: 2rem; padding: .3rem .6rem; border-radius: 0; font-size: .75rem; outline-offset: -2px; }
   #tools button[aria-pressed=true] { background: var(--text); color: #000; }
-  #tools button[aria-pressed] { margin-top: .5rem; }
-  #tools button[aria-pressed] ~ button[aria-pressed] { margin-top: 0; }
-  #controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: .75rem; align-items: center; padding: .75rem 1.25rem 1rem; background: var(--bg); }
+  #controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: .75rem; align-items: center; padding: .75rem 1.25rem 1rem; background: var(--card); }
   #controls .menu > button { background: none; }
   /* Play / pause button, drawn in CSS: a triangle, or two bars when .on. --s scales it. */
   .pp { --s: 1; flex: none; display: inline-grid; place-items: center; width: calc(2.25rem * var(--s)); height: calc(2.25rem * var(--s)); padding: 0; border-radius: 50%; background: var(--text); color: #000; }
@@ -133,9 +135,9 @@
   #clock { font-variant-numeric: tabular-nums; min-width: 4.5em; text-align: right; font-weight: 600; }
 
   /* Every column has a set width, so nothing shifts as the numbers change. The first row sets them. */
-  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; font-stretch: 88%; }
-  #timing th:nth-child(1) { width: 2.5rem; } #timing th:nth-child(2) { width: 5rem; } #timing th:nth-child(3), #timing th:nth-child(4) { width: 4.75rem; }
-  #timing th:nth-child(5) { width: 3.75rem; } #timing th:nth-child(6) { width: 3rem; } #timing th:nth-child(7) { width: 3.5rem; }
+  table { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; font-stretch: 92%; }
+  #timing th:nth-child(1), #pitTable th:nth-child(1) { width: 2.5rem; } #timing th:nth-child(3), #timing th:nth-child(4) { width: 6rem; } #timing th:nth-child(5) { width: 5rem; }
+  #pitTable th.n { width: 6rem; } #pitTable td:first-child { color: var(--dim); } #pitTable { margin-bottom: 1.75rem; }
   #timing :is(th, td):nth-child(5) { padding-left: .75rem; }
   #laps th.n { width: 4.25rem; }
   #champ td:first-child { width: 2.5rem; } #champ td.n { width: 4rem; }
@@ -145,13 +147,14 @@
   td, th { padding: .5rem .35rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
   tr:last-child td { border-bottom: 0; }
   td.n, th.n { text-align: right; }
-  /* The timing tower carries the colour: each driver's place sits in a block of the team's colour (--team, set per row in app.js). */
-  #tower td { padding-block: .3rem; border-bottom: 0; }
-  #tower td:first-child { width: 2rem; padding-inline: 0; text-align: center; font-weight: 800; color: #000; background: var(--team) content-box; border-block: .1875rem solid var(--bg); }
-  #tower td:nth-child(2) { padding-left: .75rem; font-weight: 700; font-size: 1.0625rem; font-stretch: 100%; letter-spacing: .01em; }
-  #tower tr { background: var(--bg); } /* opaque, so a row that is moving covers the one it passes */
+  /* The timing tower: a quiet place number, then a small bar of the team's colour (--team, set per row in app.js) before the name. */
+  #tower td { padding-block: .55rem; border-bottom: 0; }
+  #tower td:first-child { color: var(--dim); }
+  #tower td:nth-child(2) { font-weight: 600; font-size: 1rem; font-stretch: 100%; }
+  #tower td:nth-child(2)::before { content: ''; display: inline-block; width: .25rem; height: 1em; border-radius: 99px; background: var(--team); margin-right: .6rem; vertical-align: -.12em; }
+  #tower tr { background: var(--card); } /* opaque, so a row that is moving covers the one it passes */
   #tower .out td { color: var(--dim); } /* retired */
-  #tower .out td:first-child { background: none; }
+  #tower .out td:nth-child(2)::before { opacity: .4; }
   .fast { color: var(--green); } /* lap table: the quicker driver's margin */
   .bar { display: inline-block; width: .25rem; height: 1em; border-radius: 99px; vertical-align: -.12em; margin-right: .5rem; }
   .tyre { display: inline-grid; place-items: center; width: 1.6em; height: 1.6em; border: 2px solid; border-radius: 50%; font-size: .6875rem; font-weight: 700; vertical-align: 1px; }
@@ -188,15 +191,12 @@
   @media (max-width: 40rem) { /* phone: seasons above races, and tighter panels so the timing table fits */
     #pick { flex-direction: column; align-items: stretch; gap: 0; }
     .panel { padding-inline: .75rem; }
-    #lap { font-size: 1.5rem; }
     td, th { padding-inline: .2rem; }
-    #timing th:nth-child(1) { width: 2rem; } #timing th:nth-child(2) { width: 4rem; } #timing th:nth-child(3), #timing th:nth-child(4) { width: 3.75rem; }
-    #timing th:nth-child(5) { width: 3.1rem; } #timing th:nth-child(6) { width: 2.4rem; } #timing th:nth-child(7) { width: 2.75rem; }
+    #timing th:nth-child(1) { width: 2rem; } #timing th:nth-child(3), #timing th:nth-child(4) { width: 4.5rem; } #timing th:nth-child(5) { width: 4rem; }
     #timing :is(th, td):nth-child(5) { padding-left: .5rem; }
-    #tower td:nth-child(2) { padding-left: .5rem; font-size: 1rem; }
-    #laps :is(th, td):nth-child(2) { display: none; } /* four laps fit a phone, five do not */
+        #laps :is(th, td):nth-child(2) { display: none; } /* four laps fit a phone, five do not */
   }
-  @media (pointer: coarse) { button, select { min-height: 2.75rem; } li button { min-height: 2.25rem; } .pp { min-height: 0; } #radio .pp { --s: 1; } } /* play buttons stay round */
+  @media (pointer: coarse) { button, select { min-height: 2.75rem; } li button, #tools button { min-height: 2.25rem; } .pp { min-height: 0; } #radio .pp { --s: 1; } } /* play buttons stay round */
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   @media (prefers-contrast: more) { :root { --line: #777; --dim: #d0d0d0; } }
 </style>
@@ -213,8 +213,8 @@
     <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span><div id="cam3"><nav id="cam" aria-label="Camera"></nav><select id="follow" aria-label="Car to follow"></select></div></div>
     <div id="loading"><span id="loadText">Loading races…</span><div class="prog"><i id="loadBar"></i></div></div>
     <div id="tools">
-      <button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button>
-      <button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
+      <div><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button></div>
+      <div><button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button></div>
     </div>
     <div id="controls">
       <button id="play" class="pp" aria-label="Play"></button>
@@ -232,7 +232,7 @@
     <div id="panels">
       <section id="timing" class="panel cur" data-p="timing" aria-label="Timing" hidden>
         <table>
-          <thead><tr><th>P</th><th>Driver</th><th class="n">Gap</th><th class="n">Interval</th><th>Tyre</th><th class="n">Stops</th><th class="n" title="Position after a pit stop made right now">If pits</th></tr></thead>
+          <thead><tr><th>P</th><th>Driver</th><th class="n">Gap</th><th class="n">Interval</th><th>Tyre</th></tr></thead>
           <tbody id="tower"></tbody>
         </table>
       </section>
@@ -258,6 +258,10 @@
         </section>
         <section class="panel" data-p="pits" aria-label="Pit stops">
           <p id="pitloss"></p>
+          <table id="pitTable">
+            <thead><tr><th>P</th><th>Driver</th><th class="n">Stops</th><th class="n" title="Position after a pit stop made right now">If pits now</th></tr></thead>
+            <tbody id="pitRows"></tbody>
+          </table>
           <h2>Lap times</h2>
           <p class="note">Dashed lines are pit stops, marked with the tyre fitted.</p>
           <select id="pitWho" aria-label="Driver"></select>

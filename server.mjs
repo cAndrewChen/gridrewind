@@ -14,13 +14,14 @@ const FILES = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/ja
 const dir = new URL('./recordings/', import.meta.url);
 mkdirSync(dir, { recursive: true });
 
-let key = null, lines = []; // the current session and its recorded messages, one JSON string each
+let key = null, last = 0, lines = []; // the current session and its recorded messages, one JSON string each
 
 // Every message is kept as [topic, data, time] so a viewer who joins late can replay from the start.
 function record(topic, data, time) {
   if (topic === 'SessionInfo') open(data);
   if (key === null) return;
   const line = JSON.stringify([topic, data, time]);
+  last = Date.now();
   lines.push(line);
   appendFileSync(new URL(`${key}.jsonl`, dir), line + '\n');
 }
@@ -138,7 +139,8 @@ createServer((req, res) => {
   if (url.pathname === '/live') {
     const since = Math.max(0, parseInt(url.searchParams.get('since'), 10) || 0);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    return res.end(`{"key":${key},"next":${lines.length},"lines":[${lines.slice(since).join(',')}]}`);
+    // shortcut: "live" is any message in the last minute, so a long silence in a stopped session reads as not live; use SessionStatus if that matters.
+    return res.end(`{"key":${key},"live":${Date.now() - last < 60e3},"next":${lines.length},"lines":[${lines.slice(since).join(',')}]}`);
   }
   if (url.pathname === '/radio') {
     // F1's server does not let a web page read its radio clips, only play them. The page gets a clip

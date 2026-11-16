@@ -70,6 +70,7 @@ const name = n => S.drivers[n]?.name_acronym ?? `#${n}`;
 let year, loadId = 0, S = null, playing = false;
 
 function buttons(nav, items, pressed, onPick) {
+  const kept = nav.children.length ? nav.scrollLeft : null; // a row redrawn after a click stays where the user left it
   nav.textContent = '';
   for (const it of items) {
     const b = document.createElement('button');
@@ -79,8 +80,9 @@ function buttons(nav, items, pressed, onPick) {
     b.setAttribute('aria-pressed', it.value === pressed);
     b.onclick = () => onPick(it.value);
     nav.append(b);
-    if (it.value === pressed) nav.scrollLeft = b.offsetLeft - nav.offsetLeft - (nav.clientWidth - b.offsetWidth) / 2; // centred in its row (scrollIntoView would also move the page)
+    if (kept === null && it.value === pressed) nav.scrollLeft = b.offsetLeft - nav.offsetLeft - (nav.clientWidth - b.offsetWidth) / 2; // a new row is centred on its choice (scrollIntoView would also move the page)
   }
+  if (kept !== null) nav.scrollLeft = kept;
 }
 
 async function showYear(y) {
@@ -535,7 +537,8 @@ function fit(c) {
   return [g, w, h];
 }
 
-const FONT = 'Archivo, system-ui, sans-serif'; // as the page
+const FONT = getComputedStyle(document.body).fontFamily; // as the page
+const INK = Object.fromEntries(['dim', 'road', 'mid', 'text', 'dot'].map(k => [k, getComputedStyle(document.documentElement).getPropertyValue('--' + k).trim()])); // the map's colours, from the page's CSS
 const PAD = 28, TOP = 72, BOTTOM = 96; // the lap counter floats over the top of the map, the playback bar over the bottom
 // The part of the map canvas that nothing floats over, in canvas pixels: the stage's own box.
 // Today that is the whole canvas; it is measured so the canvas may one day run on under other things.
@@ -545,7 +548,7 @@ function area() {
 }
 function draw() {
   const [g] = fit($('map')), A = area();
-  g.fillStyle = '#8f9196';
+  g.fillStyle = INK.dim;
   g.font = `13px ${FONT}`;
   const note = text => { g.textAlign = 'right'; g.fillText(text, A.r - 20, A.b - 80); g.textAlign = 'left'; }; // above the playback bar, on the right: the loading line has the left
   if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
@@ -569,21 +572,21 @@ function draw() {
   g.lineTo(X(l[0][0]), Y(l[0][1])); g.lineTo(X(r[0][0]), Y(r[0][1]));
   for (const e of r.toReversed()) g.lineTo(X(e[0]), Y(e[1]));
   g.closePath();
-  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = '#3a3c41'; g.fill(); g.stroke();
+  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = INK.road; g.fill(); g.stroke();
   g.beginPath();
   for (const pt of S.track) g.lineTo(X(pt.x), Y(pt.y));
   g.closePath();
-  g.lineWidth = zoom ? 2 : 1; g.strokeStyle = 'rgba(255, 255, 255, .55)'; g.stroke();
+  g.lineWidth = zoom ? 2 : 1; g.strokeStyle = INK.mid; g.stroke();
 
   g.font = `600 12px ${FONT}`;
   if (opt.sectors) (S.marks ?? []).forEach((j, i) => { // a line across the track where each sector starts
     const a = S.track.at(j - 2), b = S.track[(j + 2) % S.track.length], x = X(S.track[j].x), y = Y(S.track[j].y);
     const dx = X(b.x) - X(a.x), dy = Y(b.y) - Y(a.y), d = Math.hypot(dx, dy) || 1, px = -dy / d, py = dx / d;
     g.beginPath(); g.moveTo(x - 10 * px, y - 10 * py); g.lineTo(x + 10 * px, y + 10 * py);
-    g.lineWidth = 2; g.strokeStyle = g.fillStyle = '#fff'; g.stroke();
+    g.lineWidth = 2; g.strokeStyle = g.fillStyle = INK.text; g.stroke();
     g.textAlign = 'center'; g.fillText(`S${i + 1}`, x + 22 * px, y + 22 * py); g.textAlign = 'left';
   });
-  g.fillStyle = '#8f9196';
+  g.fillStyle = INK.dim;
   g.font = `13px ${FONT}`;
 
   if (S.live) note('Estimated positions (from mini-sector times)');
@@ -601,8 +604,8 @@ function draw() {
     const d = S.drivers[n], x = X(xy[0]), y = Y(xy[1]);
     g.beginPath(); g.arc(x, y, 6, 0, 2 * Math.PI);
     g.fillStyle = `#${d.team_colour || '999'}`; g.fill();
-    g.lineWidth = 1.5; g.strokeStyle = '#17181a'; g.stroke();
-    if (opt.names) { g.fillStyle = '#fff'; g.fillText(d.name_acronym, x + 9, y); }
+    g.lineWidth = 1.5; g.strokeStyle = INK.dot; g.stroke();
+    if (opt.names) { g.fillStyle = INK.text; g.fillText(d.name_acronym, x + 9, y); }
   }
 }
 
@@ -742,6 +745,7 @@ function render() {
   const num = n => typeof gaps[n]?.gap === 'number' ? gaps[n].gap : Infinity;
   // Each driver keeps one row, which is moved rather than rebuilt, so a change of position is seen as a move.
   const rows = S.rows ??= {};
+  let pit = '';
   for (const { n, p } of ord) {
     const d = S.drivers[n], lap = lapOf(n) || 1;
     const st = S.stints[n]?.filter(x => x.lap_start <= lap).pop();
@@ -753,9 +757,11 @@ function render() {
     (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
     rows[n].style.setProperty('--team', `#${d.team_colour || '999'}`);
     rows[n].dataset.n = n; // map3d.js follows the car whose row is clicked
-    rows[n].innerHTML = dnf ? `<td></td><td>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td>${esc(d.name_acronym)}</td>` +
-      `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
+    rows[n].innerHTML = dnf ? `<td></td><td>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="2"></td>` : `<td>${p === 99 ? '' : p}</td><td>${esc(d.name_acronym)}</td>` +
+      `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td>`;
+    if (!dnf) pit += `<tr><td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${stops}</td><td class="n">${after}</td></tr>`;
   }
+  $('pitRows').innerHTML = pit;
   const key = ord.map(o => o.n).join();
   if (key !== S.shown.tower) {
     S.shown.tower = key;
@@ -1198,4 +1204,17 @@ console.assert(parseGap('+1.234') === 1.234 && parseGap('LAP 12') === 0 && parse
 requestAnimationFrame(frame);
 showYear(new Date().getFullYear());
 // The Live button and radio transcripts only exist when the page is served by server.mjs.
-fetch('live?since=999999999').then(r => { $('live').hidden = !r.ok; served = r.ok; redraw(); }, () => {});
+// The button says whether a session is on right now; it is asked again each minute.
+const liveNow = () => fetch('live?since=999999999').then(async r => {
+  const b = $('live'), was = served;
+  b.hidden = !r.ok; served = r.ok;
+  if (r.ok) {
+    const { key, live } = await r.json();
+    b.classList.toggle('on', !!live);
+    b.textContent = live ? 'Live now' : 'No live session';
+    b.disabled = key === null; // nothing recorded to open
+    b.title = live || key === null ? '' : 'Open the last recording';
+  }
+  if (served !== was) redraw();
+}, () => {});
+liveNow(); setInterval(liveNow, 60e3);
