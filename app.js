@@ -535,13 +535,19 @@ function fit(c) {
   return [g, w, h];
 }
 
-const FONT = 'Bahnschrift, "DIN Alternate", "Roboto Condensed", system-ui, sans-serif'; // as the page
-const PAD = 28, TOP = 72, BOTTOM = 84; // the lap counter floats over the top of the map, the playback bar sits along the bottom
+const FONT = 'Archivo, system-ui, sans-serif'; // as the page
+const PAD = 28, TOP = 72, BOTTOM = 96; // the lap counter floats over the top of the map, the playback bar over the bottom
+// The part of the map canvas that nothing floats over, in canvas pixels: the stage's own box.
+// Today that is the whole canvas; it is measured so the canvas may one day run on under other things.
+function area() {
+  const c = $('map').getBoundingClientRect(), s = $('stage').getBoundingClientRect();
+  return { w: s.width, h: s.height, r: s.right - c.left, b: s.bottom - c.top, cx: s.left - c.left + s.width / 2, cy: s.top - c.top + (s.height + TOP - BOTTOM) / 2 };
+}
 function draw() {
-  const [g, w, h] = fit($('map'));
-  g.fillStyle = '#8e8e8e';
+  const [g] = fit($('map')), A = area();
+  g.fillStyle = '#8f9196';
   g.font = `13px ${FONT}`;
-  const note = text => { g.textAlign = 'right'; g.fillText(text, w - 20, h - 70); g.textAlign = 'left'; }; // above the playback bar, on the right: the loading line has the left
+  const note = text => { g.textAlign = 'right'; g.fillText(text, A.r - 20, A.b - 80); g.textAlign = 'left'; }; // above the playback bar, on the right: the loading line has the left
   if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
 
   // An overtake close-up follows the two cars; otherwise the whole track is shown.
@@ -551,9 +557,9 @@ function draw() {
   const R = zoom ? Math.max(1200, 0.7 * Math.hypot(p[0] - q[0], p[1] - q[1])) : 0; // half the close-up's width: 120 m, more if the cars are far apart
   const { x0, x1, y0, y1 } = zoom ? { x0: (p[0] + q[0]) / 2 - R, x1: (p[0] + q[0]) / 2 + R, y0: (p[1] + q[1]) / 2 - R, y1: (p[1] + q[1]) / 2 + R } : S.box;
   const v = zoom ? { z: 1, x: 0, y: 0 } : view; // a close-up ignores the user's own zoom
-  const k = v.z * Math.min((w - 2 * PAD) / (x1 - x0), (h - TOP - BOTTOM) / (y1 - y0));
-  const X = x => w / 2 + (x - (x0 + x1) / 2) * k + v.x;
-  const Y = y => (h + TOP - BOTTOM) / 2 - (y - (y0 + y1) / 2) * k + v.y; // track y points up, canvas y points down
+  const k = v.z * Math.min((A.w - 2 * PAD) / (x1 - x0), (A.h - TOP - BOTTOM) / (y1 - y0));
+  const X = x => A.cx + (x - (x0 + x1) / 2) * k + v.x;
+  const Y = y => A.cy - (y - (y0 + y1) / 2) * k + v.y; // track y points up, canvas y points down
 
   // The track surface between its two estimated edges, then the racing line on it.
   if (S.road?.of !== S.track) { S.road = road(S.track); survey(S); } // estimated now, surveyed a moment later if there is a map
@@ -563,7 +569,7 @@ function draw() {
   g.lineTo(X(l[0][0]), Y(l[0][1])); g.lineTo(X(r[0][0]), Y(r[0][1]));
   for (const e of r.toReversed()) g.lineTo(X(e[0]), Y(e[1]));
   g.closePath();
-  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = '#2e2e2e'; g.fill(); g.stroke();
+  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = '#3a3c41'; g.fill(); g.stroke();
   g.beginPath();
   for (const pt of S.track) g.lineTo(X(pt.x), Y(pt.y));
   g.closePath();
@@ -577,7 +583,7 @@ function draw() {
     g.lineWidth = 2; g.strokeStyle = g.fillStyle = '#fff'; g.stroke();
     g.textAlign = 'center'; g.fillText(`S${i + 1}`, x + 22 * px, y + 22 * py); g.textAlign = 'left';
   });
-  g.fillStyle = '#8e8e8e';
+  g.fillStyle = '#8f9196';
   g.font = `13px ${FONT}`;
 
   if (S.live) note('Estimated positions (from mini-sector times)');
@@ -595,7 +601,7 @@ function draw() {
     const d = S.drivers[n], x = X(xy[0]), y = Y(xy[1]);
     g.beginPath(); g.arc(x, y, 6, 0, 2 * Math.PI);
     g.fillStyle = `#${d.team_colour || '999'}`; g.fill();
-    g.lineWidth = 1.5; g.strokeStyle = '#000'; g.stroke();
+    g.lineWidth = 1.5; g.strokeStyle = '#17181a'; g.stroke();
     if (opt.names) { g.fillStyle = '#fff'; g.fillText(d.name_acronym, x + 9, y); }
   }
 }
@@ -651,7 +657,7 @@ function lapTimes(n, t) {
 function renderCompare(t, ord) {
   if (S.shown.cmp !== ord.length) { // fill the driver pickers; keep a choice that still exists
     S.shown.cmp = ord.length;
-    [['cmpA', ord[0].n], ['cmpB', (ord[1] ?? ord[0]).n], ['otWho', '']].forEach(([id, def]) => {
+    [['cmpA', ord[0].n], ['cmpB', (ord[1] ?? ord[0]).n], ['pitWho', ord[0].n], ['otWho', '']].forEach(([id, def]) => {
       const el = $(id), keep = el.value;
       el.innerHTML = (id === 'otWho' ? '<option value="">All drivers</option>' : '') + ord.map(o => `<option value="${esc(o.n)}">${esc(name(o.n))}</option>`).join('');
       el.value = S.drivers[keep] ? keep : def;
@@ -667,6 +673,29 @@ function renderCompare(t, ord) {
   $('wear').innerHTML = [...new Set([a, b])].flatMap(n => wear(n, t).map(r =>
     `<tr><td>${esc(name(n))}</td><td>${tyreTag(r.st.compound)}</td><td>from lap ${esc(r.st.lap_start)}</td><td class="n">${r.laps} laps</td>` +
     `<td class="n">${r.wear === undefined ? 'too few laps' : `${r.wear >= 0 ? '+' : ''}${r.wear.toFixed(2)} s/lap`}</td></tr>`)).join('');
+}
+
+// One driver's lap times so far as a line across the whole race distance, with a mark at each pit stop.
+// Redrawn only when a lap is added or the driver changes.
+function renderPits(t) {
+  const n = $('pitWho').value, laps = [...lapTimes(n, t)], key = `${n} ${laps.length}`; // [lap number, seconds]
+  if (S.shown.pits === key) return;
+  S.shown.pits = key;
+  $('pitText').textContent = laps.length < 2 ? 'No laps yet.' : '';
+  if (laps.length < 2) return void ($('pitChart').innerHTML = '');
+  const secs = laps.map(l => l[1]), lo = Math.min(...secs), hi = Math.max(lo + 1, Math.min(Math.max(...secs), median(secs) * 1.15));
+  const L = 52, R = 432, T = 22, B = 172, last = Math.max(S.totalLaps || 0, laps.at(-1)[0], 2);
+  const X = lap => L + (R - L) * (lap - 1) / (last - 1), Y = v => B - (B - T) * (Math.min(v, hi) - lo) / (hi - lo);
+  const stints = (S.stints[n] ?? []).filter(Boolean);
+  const stops = (S.pits[n] ?? []).filter(p => p.t <= t).map(p => at(S.laps[n], p.t)?.n).filter(Boolean).map(lap => {
+    const c = stints.find(st => st.lap_start > lap)?.compound;
+    return `<line class="stop" x1="${X(lap)}" x2="${X(lap)}" y1="${T}" y2="${B}"/><text x="${X(lap)}" y="${T - 8}" text-anchor="middle" style="fill:${TYRE[c] ?? ''}">${esc(c?.[0] ?? '')} L${lap}</text>`;
+  });
+  $('pitChart').ariaLabel = `Lap times of ${name(n)}`;
+  $('pitChart').innerHTML = `<line class="grid" x1="${L}" x2="${R}" y1="${T}" y2="${T}"/><line class="grid" x1="${L}" x2="${R}" y1="${B}" y2="${B}"/>` +
+    `<text x="${L - 8}" y="${T + 4}" text-anchor="end">${lapTime(hi).slice(0, -2)}</text><text x="${L - 8}" y="${B + 4}" text-anchor="end">${lapTime(lo).slice(0, -2)}</text>` +
+    `<text x="${L}" y="${B + 18}">Lap 1</text><text x="${R}" y="${B + 18}" text-anchor="end">${last}</text>` + stops.join('') +
+    `<polyline stroke="#${esc(S.drivers[n].team_colour || '999')}" points="${laps.map(l => `${X(l[0]).toFixed(1)},${Y(l[1]).toFixed(1)}`).join(' ')}"/>`;
 }
 
 function render() {
@@ -722,13 +751,18 @@ function render() {
       ? `P${rejoin(num(n), S.pitLoss, ord.filter(o => o.n !== n).map(o => num(o.n)))}` : '';
     const dnf = gone(n, t) && (S.out[n].dns ? 'DNS' : 'DNF');
     (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
+    rows[n].style.setProperty('--team', `#${d.team_colour || '999'}`);
     rows[n].dataset.n = n; // map3d.js follows the car whose row is clicked
-    rows[n].innerHTML = dnf ? `<td></td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td>` +
+    rows[n].innerHTML = dnf ? `<td></td><td>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td>${esc(d.name_acronym)}</td>` +
       `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
   }
   const key = ord.map(o => o.n).join();
   if (key !== S.shown.tower) {
     S.shown.tower = key;
+    // The 3D map's list of cars to follow is in race order too; the choice is kept.
+    const f = $('follow'), keep = f.value;
+    f.replaceChildren(new Option('Follow a car', ''), ...ord.map(o => new Option(`${o.p === 99 ? '' : `P${o.p} `}${name(o.n)}`, o.n)));
+    f.value = keep;
     // Where each row is on screen right now, mid-move or not: the slide to its new place starts from there.
     // No slide after a jump on the slider (more than 30 s of race since the last look): the whole order is new then.
     const was = Math.abs(t - S.shown.at) > 30e3 || matchMedia('(prefers-reduced-motion: reduce)').matches ? [] : ord.filter(o => rows[o.n].isConnected).map(o => [rows[o.n], rows[o.n].getBoundingClientRect().top]);
@@ -742,6 +776,7 @@ function render() {
   S.shown.at = t;
 
   renderCompare(t, ord);
+  renderPits(t);
 
   // Live standings: points before this session plus the points for the current position.
   if (S.champD.length) {
@@ -962,8 +997,8 @@ $('zout').onclick = () => zoomBy(1 / 1.6);
 $('zfit').onclick = () => setView({ z: 1, x: 0, y: 0 });
 $('map').addEventListener('wheel', e => {
   if (!S?.track) return;
-  const c = e.target;
-  zoomBy(Math.exp(-e.deltaY / 400), [e.offsetX - c.clientWidth / 2, e.offsetY - (c.clientHeight + TOP - BOTTOM) / 2]);
+  const A = area();
+  zoomBy(Math.exp(-e.deltaY / 400), [e.offsetX - A.cx, e.offsetY - A.cy]);
   e.preventDefault(); // the wheel zooms the map instead of scrolling the page
 }, { passive: false });
 // shortcut: a finger drags the map but two fingers do not pinch it (the buttons zoom); add pinch if phones need it.
@@ -999,6 +1034,7 @@ function frame(now) {
   const i = Math.floor((S.t - S.t0) / CHUNK);
   chunk(i);
   if (playing) chunk(i + 1);
+  $('seek').style.setProperty('--p', $('seek').value / ($('seek').max || 1)); // the filled part of the slider
   if (S.focus && (S.t < S.focus.from || S.t > S.focus.until)) { $('speed').value = S.focus.speed; S.focus = null; } // an overtake close-up is over, on either map
   const three = !!(opt.three && window.draw3d); // map3d.js sets draw3d only if WebGL and three.js loaded
   if (!three && $('map').hidden) setView(view); // back from 3D: the zoom buttons are the flat map's again
@@ -1010,6 +1046,14 @@ function frame(now) {
 $('play').onclick = () => { if (S) setPlaying(!playing); };
 $('seek').oninput = e => { if (S) S.t = S.t0 + e.target.value * 1000; };
 $('live').onclick = loadLive;
+// The left and right arrow keys step the race back and forward 5 seconds, wherever the focus is.
+addEventListener('keydown', e => {
+  const d = { ArrowLeft: -5e3, ArrowRight: 5e3 }[e.key];
+  if (!d || !S || S.t === undefined || e.ctrlKey || e.metaKey || e.altKey) return;
+  S.t = Math.max(S.t0, Math.min(edge(), S.t + d));
+  $('seek').value = Math.round((S.t - S.t0) / 1000);
+  e.preventDefault(); // or the slider, when it has the focus, would also move by its own 1 second
+});
 // The races scroll sideways with the mouse wheel anywhere on the header (there is no scroll bar).
 document.querySelector('header').addEventListener('wheel', e => {
   if (!e.deltaY || e.ctrlKey) return; // sideways swipes already scroll it; ctrl+wheel is zoom
