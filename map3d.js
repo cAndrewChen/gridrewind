@@ -267,8 +267,13 @@ function setCam(mode, n = cam.n) {
   $('follow').value = n ?? '';
 }
 
+// The camera's heading `look` after ms of following a car that points along `yaw`: most of the way there in
+// 80 ms, by the short way round; straight there if it is facing backwards (a jump along the time slider).
+const turn = (look, yaw, ms) => Math.cos(yaw - look) < 0 ? yaw : look + Math.asin(Math.sin(yaw - look)) * (1 - Math.exp(-ms / 80));
+
 function aim(now) {
-  const dt = Math.min(now - then, 100);
+  // Time passed in the race, not on the clock: at 20x the car turns 20 times as fast, and so must the camera.
+  const dt = Math.min(now - then, 100) * Math.max(1, +$('speed').value);
   then = now;
   orbit.enabled = cam.mode === 'overview';
   if (cam.mode === 'overview') {
@@ -287,12 +292,13 @@ function aim(now) {
   lost = now;
   const dir = a => new THREE.Vector3(Math.cos(a), 0, -Math.sin(a));
   if (cam.mode === 'chase') {
-    const want = at.p.clone().addScaledVector(dir(at.yaw), -9).setY(at.p.y + 4);
-    // Eased, so the camera swings round behind the car; but at high playback speeds it would be left behind.
-    if (camera.position.distanceTo(want) > 40) camera.position.copy(want); else camera.position.lerp(want, 1 - Math.exp(-dt / 150));
-    camera.lookAt(at.p.clone().addScaledVector(dir(at.yaw), 6).setY(at.p.y + 1));
+    // Always exactly 9 m behind the car, at any playback speed: only the direction "behind" is eased, so the
+    // camera swings round after the car in a corner. (Easing its position left it behind at 5x and faster.)
+    look = turn(look, at.yaw, dt / 3);
+    camera.position.copy(at.p).addScaledVector(dir(look), -9).setY(at.p.y + 4);
+    camera.lookAt(at.p.clone().addScaledVector(dir(look), 6).setY(at.p.y + 1));
   } else {
-    look = Math.cos(at.yaw - look) < 0 ? at.yaw : look + Math.asin(Math.sin(at.yaw - look)) * (1 - Math.exp(-dt / 80)); // the short way round
+    look = turn(look, at.yaw, dt);
     camera.position.copy(at.p).addScaledVector(dir(at.yaw), -0.1).setY(at.p.y + 1.05); // just above the helmet: lower, the car's own body fills the view
     camera.lookAt(camera.position.clone().addScaledVector(dir(look), 10).setY(camera.position.y - 0.35));
   }
@@ -360,5 +366,7 @@ document.querySelector('[data-opt=three]').hidden = false;
   const g = (x, y) => ground(x, y, c, h, THEMES.forest, r);
   console.assert(g(c[0][0], c[0][1]) <= h[0] - 10 && g(c[0][0], c[0][1]) > h[0] - 20 && g(40000, 40000) % STEP_H === 0 && Number.isFinite(g(-99999, 5)), 'ground');
   console.assert(Math.abs(yawOf([3000, -10], [3000, 10]) - Math.PI / 2) < 0.05 && V(0, 1, 0).z === -0.1, 'yaw: north is scene -z');
+  // the camera's heading swings towards the car's the short way round: not at all in no time, all the way given long enough, at once if it faces backwards
+  console.assert(turn(0, 1, 0) === 0 && Math.abs(turn(0, 1, 1e6) - 1) < 1e-6 && turn(3, -3, 80) > 3 && turn(0, 1.5, 80) > 0.5 && turn(0, 1.5, 80) < 1.5 && turn(0, 3, 1) === 3, 'turn');
   console.assert(theme('Nowhere') === THEMES.grass && theme('Monte Carlo').city, 'theme');
 }
