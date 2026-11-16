@@ -126,6 +126,7 @@ function blank() {
   tab('timing'); // the next race may have no overtakes or standings to show
   setView({ z: 1, x: 0, y: 0 });
   fit($('map')); // wipes the last session's map
+  window.draw3d?.(); // and the 3D one: with no session it draws an empty sky
   $('rc').textContent = $('radio').textContent = $('ot').textContent = '';
   audio.pause();
 }
@@ -722,6 +723,7 @@ function render() {
       ? `P${rejoin(num(n), S.pitLoss, ord.filter(o => o.n !== n).map(o => num(o.n)))}` : '';
     const dnf = gone(n, t) && (S.out[n].dns ? 'DNS' : 'DNF');
     (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
+    rows[n].dataset.n = n; // map3d.js follows the car whose row is clicked
     rows[n].innerHTML = dnf ? `<td></td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td>` +
       `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
   }
@@ -999,6 +1001,7 @@ function frame(now) {
   chunk(i);
   if (playing) chunk(i + 1);
   const three = !!(opt.three && window.draw3d); // map3d.js sets draw3d only if WebGL and three.js loaded
+  if (!three && $('map').hidden) setView(view); // back from 3D: the zoom buttons are the flat map's again
   $('map').hidden = three; $('map3d').hidden = !three;
   if (three) draw3d(); else draw();
   if (now - lastPanel > 250) { lastPanel = now; render(); }

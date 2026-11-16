@@ -87,6 +87,11 @@
   .chip.yellow { background: var(--yellow); } .chip.red { background: var(--red); color: #fff; } .chip.sc { background: var(--orange); } .chip.end { background: #fff; }
   /* Zoom and what the map shows, down its right edge. */
   #tools { position: absolute; top: 1rem; right: .75rem; display: grid; gap: .25rem; justify-items: end; }
+  #cam3 { position: absolute; top: 3.5rem; left: 1.25rem; display: flex; flex-wrap: wrap; gap: .25rem; }
+  #cam { display: flex; gap: .25rem; }
+  main:has(#map3d:not([hidden])) #tower tr { cursor: pointer; } /* in 3D a click on a driver follows that car */
+  #cam button[aria-pressed=true] { background: var(--text); color: #000; }
+  #map3d[hidden] ~ #cam3, #stage.empty #cam3 { display: none; } /* the camera controls belong to the 3D map */
   #tools button { min-width: 2.25rem; }
   #tools button[aria-pressed=true] { background: var(--text); color: #000; }
   #tools button[aria-pressed] { margin-top: .5rem; }
@@ -168,6 +173,7 @@
       <button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button>
       <button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
     </div>
+    <div id="cam3"><nav id="cam" aria-label="Camera"></nav><select id="follow" aria-label="Car to follow"></select></div>
     <div id="controls">
       <button id="play" class="pp" aria-label="Play"></button>
       <input id="seek" type="range" min="0" step="1" value="0" aria-label="Race time">
