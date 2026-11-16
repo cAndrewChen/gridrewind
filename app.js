@@ -534,13 +534,19 @@ function fit(c) {
   return [g, w, h];
 }
 
-const FONT = 'Bahnschrift, "DIN Alternate", "Roboto Condensed", system-ui, sans-serif'; // as the page
-const PAD = 28, TOP = 72, BOTTOM = 84; // the lap counter floats over the top of the map, the playback bar sits along the bottom
+const FONT = 'Archivo, system-ui, sans-serif'; // as the page
+const PAD = 28, TOP = 72, BOTTOM = 96; // the lap counter floats over the top of the map, the playback bar over the bottom
+// The part of the map canvas that nothing floats over, in canvas pixels: the stage's own box.
+// Today that is the whole canvas; it is measured so the canvas may one day run on under other things.
+function area() {
+  const c = $('map').getBoundingClientRect(), s = $('stage').getBoundingClientRect();
+  return { w: s.width, h: s.height, r: s.right - c.left, b: s.bottom - c.top, cx: s.left - c.left + s.width / 2, cy: s.top - c.top + (s.height + TOP - BOTTOM) / 2 };
+}
 function draw() {
-  const [g, w, h] = fit($('map'));
-  g.fillStyle = '#8e8e8e';
+  const [g] = fit($('map')), A = area();
+  g.fillStyle = '#8f9196';
   g.font = `13px ${FONT}`;
-  const note = text => { g.textAlign = 'right'; g.fillText(text, w - 20, h - 70); g.textAlign = 'left'; }; // above the playback bar, on the right: the loading line has the left
+  const note = text => { g.textAlign = 'right'; g.fillText(text, A.r - 20, A.b - 80); g.textAlign = 'left'; }; // above the playback bar, on the right: the loading line has the left
   if (!S.track) return note('No reference lap for this circuit yet, so there is no live map.');
 
   // An overtake close-up follows the two cars; otherwise the whole track is shown.
@@ -551,9 +557,9 @@ function draw() {
   const R = zoom ? Math.max(1200, 0.7 * Math.hypot(p[0] - q[0], p[1] - q[1])) : 0; // half the close-up's width: 120 m, more if the cars are far apart
   const { x0, x1, y0, y1 } = zoom ? { x0: (p[0] + q[0]) / 2 - R, x1: (p[0] + q[0]) / 2 + R, y0: (p[1] + q[1]) / 2 - R, y1: (p[1] + q[1]) / 2 + R } : S.box;
   const v = zoom ? { z: 1, x: 0, y: 0 } : view; // a close-up ignores the user's own zoom
-  const k = v.z * Math.min((w - 2 * PAD) / (x1 - x0), (h - TOP - BOTTOM) / (y1 - y0));
-  const X = x => w / 2 + (x - (x0 + x1) / 2) * k + v.x;
-  const Y = y => (h + TOP - BOTTOM) / 2 - (y - (y0 + y1) / 2) * k + v.y; // track y points up, canvas y points down
+  const k = v.z * Math.min((A.w - 2 * PAD) / (x1 - x0), (A.h - TOP - BOTTOM) / (y1 - y0));
+  const X = x => A.cx + (x - (x0 + x1) / 2) * k + v.x;
+  const Y = y => A.cy - (y - (y0 + y1) / 2) * k + v.y; // track y points up, canvas y points down
 
   // The track surface between its two estimated edges, then the racing line on it.
   if (S.road?.of !== S.track) { S.road = road(S.track); survey(S); } // estimated now, surveyed a moment later if there is a map
@@ -563,7 +569,7 @@ function draw() {
   g.lineTo(X(l[0][0]), Y(l[0][1])); g.lineTo(X(r[0][0]), Y(r[0][1]));
   for (const e of r.toReversed()) g.lineTo(X(e[0]), Y(e[1]));
   g.closePath();
-  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = '#2e2e2e'; g.fill(); g.stroke();
+  g.lineJoin = 'round'; g.lineWidth = 2; g.fillStyle = g.strokeStyle = '#3a3c41'; g.fill(); g.stroke();
   g.beginPath();
   for (const pt of S.track) g.lineTo(X(pt.x), Y(pt.y));
   g.closePath();
@@ -577,7 +583,7 @@ function draw() {
     g.lineWidth = 2; g.strokeStyle = g.fillStyle = '#fff'; g.stroke();
     g.textAlign = 'center'; g.fillText(`S${i + 1}`, x + 22 * px, y + 22 * py); g.textAlign = 'left';
   });
-  g.fillStyle = '#8e8e8e';
+  g.fillStyle = '#8f9196';
   g.font = `13px ${FONT}`;
 
   if (S.live) note('Estimated positions (from mini-sector times)');
@@ -595,7 +601,7 @@ function draw() {
     const d = S.drivers[n], x = X(xy[0]), y = Y(xy[1]);
     g.beginPath(); g.arc(x, y, 6, 0, 2 * Math.PI);
     g.fillStyle = `#${d.team_colour || '999'}`; g.fill();
-    g.lineWidth = 1.5; g.strokeStyle = '#000'; g.stroke();
+    g.lineWidth = 1.5; g.strokeStyle = '#17181a'; g.stroke();
     if (opt.names) { g.fillStyle = '#fff'; g.fillText(d.name_acronym, x + 9, y); }
   }
 }
@@ -722,7 +728,8 @@ function render() {
       ? `P${rejoin(num(n), S.pitLoss, ord.filter(o => o.n !== n).map(o => num(o.n)))}` : '';
     const dnf = gone(n, t) && (S.out[n].dns ? 'DNS' : 'DNF');
     (rows[n] ??= document.createElement('tr')).className = dnf ? 'out' : '';
-    rows[n].innerHTML = dnf ? `<td></td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td>` +
+    rows[n].style.setProperty('--team', `#${d.team_colour || '999'}`);
+    rows[n].innerHTML = dnf ? `<td></td><td>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="4"></td>` : `<td>${p === 99 ? '' : p}</td><td>${esc(d.name_acronym)}</td>` +
       `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td><td class="n">${stops || ''}</td><td class="n">${after}</td>`;
   }
   const key = ord.map(o => o.n).join();
@@ -961,8 +968,8 @@ $('zout').onclick = () => zoomBy(1 / 1.6);
 $('zfit').onclick = () => setView({ z: 1, x: 0, y: 0 });
 $('map').addEventListener('wheel', e => {
   if (!S?.track) return;
-  const c = e.target;
-  zoomBy(Math.exp(-e.deltaY / 400), [e.offsetX - c.clientWidth / 2, e.offsetY - (c.clientHeight + TOP - BOTTOM) / 2]);
+  const A = area();
+  zoomBy(Math.exp(-e.deltaY / 400), [e.offsetX - A.cx, e.offsetY - A.cy]);
   e.preventDefault(); // the wheel zooms the map instead of scrolling the page
 }, { passive: false });
 // shortcut: a finger drags the map but two fingers do not pinch it (the buttons zoom); add pinch if phones need it.
@@ -998,6 +1005,7 @@ function frame(now) {
   const i = Math.floor((S.t - S.t0) / CHUNK);
   chunk(i);
   if (playing) chunk(i + 1);
+  $('seek').style.setProperty('--p', $('seek').value / ($('seek').max || 1)); // the filled part of the slider
   draw();
   if (now - lastPanel > 250) { lastPanel = now; render(); }
 }

@@ -5,34 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>F1 Replay</title>
 <style>
-  /* The look is the timing monitor on the pit wall: black, ruled, square, condensed DIN lettering.
-     Dark only, on purpose: team and tyre colours (white hards, silver cars) are made for a dark background.
-     The chrome is neutral so that colour always means something: a team, a tyre or a flag. */
-  :root { color-scheme: dark; --bg: #000; --raised: #1b1b1b; --line: #2a2a2a; --text: #ececec; --dim: #8e8e8e;
+  /* The look is flat and quiet: one tarmac grey, no boxes, no shadows, so the only colour on the page
+     is colour that means something: a team, a tyre or a flag. Dark only, on purpose: team and tyre
+     colours (white hards, silver cars) are made for a dark background. */
+  /* One file, two voices: wide for the title and lap counter, narrow for the tables. */
+  @font-face { font-family: Archivo; src: url(archivo.woff2) format('woff2'); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
+  :root { color-scheme: dark; --bg: #17181a; --solid: #242528; --fill: #242528; --fill2: #34363a; --line: #2b2c30; --text: #f2f2f0; --dim: #8f9196;
     --green: #00d85a; --yellow: #ffe000; --red: #ff2d2d; --orange: #ff9a00; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  /* Bahnschrift ships with Windows; the others are the nearest DIN on Apple and Android. shortcut: the look shifts a little between systems, bundle one font file if that matters. */
-  body { margin: 0; font: .9375rem/1.4 Bahnschrift, 'DIN Alternate', 'Roboto Condensed', system-ui, sans-serif; font-stretch: 87%; background: var(--bg); color: var(--text); }
+  body { margin: 0; font: .9375rem/1.4 Archivo, system-ui, sans-serif; font-stretch: 94%; color: var(--text); background: var(--bg); }
   :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
-  button, select { font: inherit; font-stretch: inherit; color: inherit; background: var(--raised); border: 0; border-radius: 2px; padding: .35rem .75rem; cursor: pointer; white-space: nowrap; }
-  button:active:not(:disabled) { background: #333; } /* answers on press, not on release */
+  button, select { font: inherit; font-stretch: inherit; color: inherit; background: var(--fill); border: 0; border-radius: .375rem; padding: .4rem .8rem; cursor: pointer; white-space: nowrap; transition: transform .1s ease-out, background-color .15s; }
+  button:active:not(:disabled) { background: var(--fill2); transform: scale(.96); } /* answers on press, not on release */
   button:disabled { opacity: .35; cursor: default; }
 
   /* Seasons, races and panel tabs are one kind of thing: plain words in a row, the current one white with a line under it. */
   nav { display: flex; }
-  nav button { background: none; color: var(--dim); border-radius: 0; padding: .5rem .7rem; border-bottom: 2px solid transparent; }
+  nav button { background: none; color: var(--dim); border-radius: 0; padding: .5rem .75rem; box-shadow: none; }
   nav button:hover:not(:disabled) { color: var(--text); }
-  nav button[aria-pressed=true] { color: var(--text); border-bottom-color: var(--text); font-weight: 600; }
+  nav button:active:not(:disabled) { background: none; }
+  nav button[aria-pressed=true] { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px var(--text); }
 
-  header { position: sticky; top: 0; z-index: 2; padding: .75rem 1rem 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+  header { position: sticky; top: 0; z-index: 2; padding: 1rem 1.25rem 0; background: var(--bg); border-bottom: 1px solid var(--line); }
   #top { display: flex; gap: .5rem; align-items: center; min-height: 2rem; }
   #kind:empty { display: none; } /* Race or Sprint, on a weekend that has both */
-  #status { margin: 0; font-size: 1.375rem; font-weight: 600; line-height: 1.15; }
+  #status { margin: 0; font-size: 1.375rem; font-weight: 700; font-stretch: 116%; letter-spacing: -.015em; line-height: 1.15; }
   #live { flex: none; display: flex; gap: .45rem; align-items: center; font-weight: 600; margin-left: auto; }
   #live::before { content: ''; width: .5rem; height: .5rem; border-radius: 50%; background: var(--red); }
-  #pick { display: flex; gap: 1rem; align-items: center; margin: .25rem -.7rem 0; }
+  #pick { display: flex; gap: 1rem; align-items: center; margin: .25rem -.75rem 0; }
   #years { flex: none; }
   /* The race row fades out at both ends, which says "there is more this way" without a divider. */
   #races { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; /* no bar: the wheel scrolls it from anywhere on the header */
@@ -41,84 +43,97 @@
 
   /* Phone: the map, then one panel at a time under it. Desktop: the panel on the left, the map filling the rest of the window. */
   #side { min-width: 0; }
-  #tabs { overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); padding: 0 .3rem; }
+  #tabs { overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); padding: 0 .5rem; }
   #tabs::-webkit-scrollbar { display: none; }
   #side:has(#timing[hidden]) #tabs,
   #side:has(#rcBox[hidden]) [data-tab=rc], #side:has(#radioBox[hidden]) [data-tab=radio], #side:has(#otBox[hidden]) [data-tab=ot],
   #side:has(#more[hidden]) [data-tab=laps], #side:has(#champ[hidden]) [data-tab=champ] { display: none; }
   #more { display: contents; }
-  .panel { display: none; padding: .75rem 1rem 2rem; }
+  .panel { display: none; padding: .75rem 1.25rem 2rem; }
   .panel.cur { display: block; }
   @media (min-width: 60rem) {
     body { height: 100dvh; display: flex; flex-direction: column; }
     header { position: static; }
-    main { flex: 1; min-height: 0; display: grid; grid-template-columns: 28rem minmax(0, 1fr); }
+    main { flex: 1; min-height: 0; display: grid; grid-template-columns: 27rem minmax(0, 1fr); }
     #side { order: -1; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
-    #panels { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--raised) transparent; }
+    #panels { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--fill2) transparent; }
     #stage { min-height: 0; }
   }
 
-  .sub { margin: -.5rem -.7rem .5rem; } /* choices inside a panel */
+  .sub { margin: -.5rem -.75rem .5rem; } /* choices inside a panel */
   #otPick { display: flex; justify-content: space-between; align-items: start; gap: .5rem; }
   #ot .key { font-weight: 600; box-shadow: inset 3px 0 var(--text); padding-left: .75rem; } /* a pass for a podium place */
   #ot li:not(.key) { color: var(--dim); }
 
-  /* A drop-down drawn by the page (menu() in app.js), so it looks the same in every browser. */
+  /* A drop-down drawn by the page (menu() in app.js), so it looks the same in every browser. It grows out of the button that opened it. */
   .menu { position: relative; display: inline-block; }
   .menu > button::after { content: ''; display: inline-block; margin-left: .5rem; border: .28rem solid transparent; border-top-color: currentColor; border-bottom: 0; vertical-align: .12em; }
-  .menu > div { position: absolute; z-index: 3; top: calc(100% + 2px); left: 0; min-width: 100%; max-height: 16rem; overflow-y: auto; display: grid; background: var(--raised); border: 1px solid #444; scrollbar-width: thin; }
-  .menu > div button { text-align: left; border-radius: 0; background: none; color: var(--dim); }
-  .menu > div button:hover, .menu > div button:focus-visible { background: #333; color: var(--text); }
+  .menu > div { position: absolute; z-index: 3; top: calc(100% + .25rem); left: 0; min-width: 100%; max-height: 16rem; overflow-y: auto; display: grid; padding: .25rem; background: var(--solid); border: 1px solid var(--fill2); border-radius: .5rem; scrollbar-width: thin;
+    transform-origin: top left; transition: opacity .16s, transform .16s cubic-bezier(.2, .9, .3, 1); }
+  @starting-style { .menu > div { opacity: 0; transform: scale(.94); } }
+  .menu > div button { text-align: left; border-radius: .25rem; background: none; color: var(--dim); }
+  .menu > div button:hover, .menu > div button:focus-visible { background: var(--fill2); color: var(--text); }
   .menu > div button[aria-pressed=true] { color: var(--text); font-weight: 600; }
-  #controls .menu > div { top: auto; bottom: calc(100% + 2px); left: auto; right: 0; }
+  #controls .menu > div { top: auto; bottom: calc(100% + .5rem); left: auto; right: 0; transform-origin: bottom right; }
 
   h2 { font-size: 1rem; font-weight: 600; margin: 0 0 .25rem; }
   h2 ~ h2 { margin-top: 1.75rem; }
   .note { margin: 0 0 .5rem; color: var(--dim); font-size: .8125rem; }
   .note:empty { display: none; }
 
-  /* The map is the page; the lap counter floats on it and the playback bar is docked along its bottom edge. */
+  /* The lap counter and the map tools sit on the map; the playback bar runs along its bottom edge. */
   #stage { position: relative; min-height: max(60vh, 22rem); overflow: hidden; }
   canvas { display: block; width: 100%; }
   #map { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
   #head { position: absolute; top: 1rem; left: 1.25rem; right: 5.75rem; /* clear of #tools */ display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; pointer-events: none; }
-  #lap { font-size: 1.75rem; font-weight: 600; line-height: 1.1; margin-right: .35rem; font-variant-numeric: tabular-nums; }
-  .chip { padding: .1rem .55rem; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); } /* square: a flag is a rectangle */
+  #lap { font-size: 2.25rem; font-weight: 800; font-stretch: 125%; letter-spacing: -.025em; line-height: 1.1; margin-right: .5rem; font-variant-numeric: tabular-nums; }
+  .chip { padding: .15rem .6rem; border-radius: .1875rem; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); }
   .chip.yellow { background: var(--yellow); } .chip.red { background: var(--red); color: #fff; } .chip.sc { background: var(--orange); } .chip.end { background: #fff; }
   /* Zoom and what the map shows, down its right edge. */
-  #tools { position: absolute; top: 1rem; right: .75rem; display: grid; gap: .25rem; justify-items: end; }
+  #tools { position: absolute; top: 1rem; right: 1rem; display: grid; gap: .3rem; justify-items: end; }
   #tools button { min-width: 2.25rem; }
   #tools button[aria-pressed=true] { background: var(--text); color: #000; }
   #tools button[aria-pressed] { margin-top: .5rem; }
   #tools button[aria-pressed] ~ button[aria-pressed] { margin-top: 0; }
-  #controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: .75rem; align-items: center; padding: .5rem .75rem; background: var(--bg); border-top: 1px solid var(--line); }
+  #controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: .75rem; align-items: center; padding: .75rem 1.25rem 1rem; background: var(--bg); }
+  #controls .menu > button { background: none; }
   /* Play / pause button, drawn in CSS: a triangle, or two bars when .on. --s scales it. */
-  .pp { --s: 1; flex: none; display: inline-grid; place-items: center; width: calc(2.25rem * var(--s)); height: calc(2.25rem * var(--s)); padding: 0; background: var(--text); color: #000; }
+  .pp { --s: 1; flex: none; display: inline-grid; place-items: center; width: calc(2.25rem * var(--s)); height: calc(2.25rem * var(--s)); padding: 0; border-radius: 50%; background: var(--text); color: #000; }
   .pp:active:not(:disabled) { background: #fff; }
   .pp::before { content: ''; width: calc(.8rem * var(--s)); height: calc(.9rem * var(--s)); margin-left: calc(.15rem * var(--s)); background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
   .pp.on::before { width: calc(.24rem * var(--s)); margin: 0; background: none; clip-path: none; border-inline: calc(.28rem * var(--s)) solid; } /* the width is the gap between the bars: the borders sit outside it */
   /* A thin progress line: loading, and a radio clip playing. */
-  .prog { height: 2px; background: var(--line); overflow: hidden; }
-  .prog i { display: block; height: 100%; width: 0; background: var(--text); transition: width .25s linear; }
+  .prog { height: 3px; border-radius: 99px; background: var(--fill2); overflow: hidden; }
+  .prog i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--text); transition: width .25s linear; }
   /* What is still loading: in the middle of the empty map, then tucked above the playback bar. */
-  #loading { position: absolute; left: 1.25rem; bottom: 4.7rem; width: 11rem; color: var(--dim); font-size: .8125rem; }
+  #loading { position: absolute; left: 1.25rem; bottom: 5rem; width: 11rem; color: var(--dim); font-size: .8125rem; }
   #loading .prog { margin-top: .35rem; }
   #stage.empty #loading { left: 50%; bottom: auto; top: 50%; transform: translate(-50%, -50%); width: min(18rem, 80%); text-align: center; font-size: .9375rem; }
   #stage.empty :is(#head, #controls, #tools) { display: none; }
-  #seek { flex: 1; min-width: 0; accent-color: var(--text); }
+  /* The slider: a hairline that fills as the race runs (--p, set in app.js) and a knob that grows when held. */
+  #seek { flex: 1; min-width: 0; height: 1.5rem; margin: 0; -webkit-appearance: none; appearance: none; background: none; cursor: pointer; }
+  #seek::-webkit-slider-runnable-track { height: .25rem; border-radius: 99px; background: linear-gradient(90deg, var(--text) calc(var(--p, 0) * 100%), var(--fill2) 0); }
+  #seek::-webkit-slider-thumb { -webkit-appearance: none; width: .875rem; height: .875rem; margin-top: -.3125rem; border-radius: 50%; background: #fff; transition: scale .12s ease-out; }
+  #seek:active::-webkit-slider-thumb { scale: 1.3; }
+  #seek::-moz-range-track { height: .25rem; border-radius: 99px; background: var(--fill2); }
+  #seek::-moz-range-progress { height: .25rem; border-radius: 99px; background: var(--text); }
+  #seek::-moz-range-thumb { width: .875rem; height: .875rem; border: 0; border-radius: 50%; background: #fff; }
   #clock { font-variant-numeric: tabular-nums; min-width: 4.5em; text-align: right; font-weight: 600; }
 
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-stretch: 88%; }
   th { text-align: left; color: var(--dim); font-weight: 400; font-size: .8125rem; }
   td, th { padding: .5rem .35rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
   tr:last-child td { border-bottom: 0; }
   td.n, th.n { text-align: right; }
+  /* The timing tower carries the colour: each driver's place sits in a block of the team's colour (--team, set per row in app.js). */
+  #tower td { padding-block: .3rem; border-bottom: 0; }
+  #tower td:first-child { width: 2rem; padding-inline: 0; text-align: center; font-weight: 800; color: #000; background: var(--team) content-box; border-block: .1875rem solid var(--bg); }
+  #tower td:nth-child(2) { padding-left: .75rem; font-weight: 700; font-size: 1.0625rem; font-stretch: 100%; letter-spacing: .01em; }
   #tower tr { background: var(--bg); } /* opaque, so a row that is moving covers the one it passes */
-  #tower td:first-child { color: var(--dim); }
-  #tower td:nth-child(2) { font-weight: 600; }
-  #tower .out, #tower .out td { color: var(--dim); } /* retired */
+  #tower .out td { color: var(--dim); } /* retired */
+  #tower .out td:first-child { background: none; }
   .fast { color: var(--green); } /* lap table: the quicker driver's margin */
-  .bar { display: inline-block; width: .25rem; height: 1em; vertical-align: -.12em; margin-right: .5rem; }
+  .bar { display: inline-block; width: .25rem; height: 1em; border-radius: 99px; vertical-align: -.12em; margin-right: .5rem; }
   .tyre { display: inline-grid; place-items: center; width: 1.6em; height: 1.6em; border: 2px solid; border-radius: 50%; font-size: .6875rem; font-weight: 700; vertical-align: 1px; }
 
   #cmpPick { display: flex; gap: .5rem; align-items: center; color: var(--dim); margin-top: .5rem; }
@@ -145,10 +160,11 @@
   @media (max-width: 40rem) { /* phone: seasons above races, and tighter panels so the timing table fits */
     #pick { flex-direction: column; align-items: stretch; gap: 0; }
     .panel { padding-inline: .75rem; }
+    #lap { font-size: 1.5rem; }
     td, th { padding-inline: .2rem; }
     #laps :is(th, td):nth-child(2) { display: none; } /* four laps fit a phone, five do not */
   }
-  @media (pointer: coarse) { button, select { min-height: 2.75rem; } li button { min-height: 2.25rem; } .pp { min-height: 0; } #radio .pp { --s: 1; } } /* play buttons stay square */
+  @media (pointer: coarse) { button, select { min-height: 2.75rem; } li button { min-height: 2.25rem; } .pp { min-height: 0; } #radio .pp { --s: 1; } } /* play buttons stay round */
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   @media (prefers-contrast: more) { :root { --line: #777; --dim: #d0d0d0; } }
 </style>
