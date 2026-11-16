@@ -79,6 +79,7 @@ scene.add(world, sky, sun);
 const orbit = new OrbitControls(camera, canvas);
 orbit.maxPolarAngle = 1.45; // never under the ground
 orbit.enableDamping = true;
+orbit.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null }; // the left button slides the map; the right one looks around (below)
 orbit.minDistance = 20; orbit.maxDistance = 15000; // further out, the world would fall behind the camera's far limit
 
 const CUBE = new THREE.BoxGeometry(1, 1, 1); // every block in the world is this cube, stretched
@@ -258,12 +259,13 @@ let lost = 0, look = 0, then = 0, held = null; // held: the user's own overview,
 // lost: when the followed car was last seen; look: where the cockpit camera points
 
 function setCam(mode, n = cam.n) {
+  if (mode !== 'overview') n ||= order(S.t)[0]?.n; // Chase or Cockpit with no car picked: the leader
   if (mode !== 'overview' && !n) return;
   if (mode === 'overview' && cam.mode !== 'overview' && home) goHome();
   Object.assign(cam, { mode, n });
   lost = performance.now();
   look = cars[n]?.userData.yaw ?? 0;
-  for (const b of $('cam').children) { b.setAttribute('aria-pressed', b.value === mode); b.disabled = b.value !== 'overview' && !n; }
+  for (const b of $('cam').children) { b.setAttribute('aria-pressed', b.value === mode); b.disabled = false; }
   $('follow').value = n ?? '';
 }
 
@@ -273,7 +275,7 @@ const turn = (look, yaw, ms) => Math.cos(yaw - look) < 0 ? yaw : look + Math.asi
 
 function aim(now) {
   // Time passed in the race, not on the clock: at 20x the car turns 20 times as fast, and so must the camera.
-  const dt = Math.min(now - then, 100) * Math.max(1, +$('speed').value);
+  const real = Math.min(now - then, 100), dt = real * Math.max(1, +$('speed').value);
   then = now;
   orbit.enabled = cam.mode === 'overview';
   if (cam.mode === 'overview') {
@@ -285,6 +287,17 @@ function aim(now) {
       orbit.target.copy(mid);
       camera.position.copy(mid).add(new THREE.Vector3(0, far * 0.8, far * 0.6));
     } else if (held && !S.focus) { orbit.target.copy(held[0]); camera.position.copy(held[1]); held = null; }
+    else if (keys.size) { // W A S D: fly over the ground, the camera and the point it looks at together. Space or E, and Q: straight up and down
+      const fwd = camera.getWorldDirection(new THREE.Vector3());
+      if (Math.hypot(fwd.x, fwd.z) < 0.01) fwd.copy(camera.up).applyQuaternion(camera.quaternion); // looking straight down: forward is up the screen
+      fwd.setY(0).normalize();
+      const side = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      const pace = camera.position.distanceTo(orbit.target) * real / 4000; // a quarter of its own distance each second: slow close in, fast far out
+      const step = fwd.multiplyScalar(keys.has('KeyW') - keys.has('KeyS')).add(side.multiplyScalar(keys.has('KeyD') - keys.has('KeyA'))).multiplyScalar(pace);
+      orbit.target.add(step); camera.position.add(step);
+      const rise = Math.max(((keys.has('Space') || keys.has('KeyE')) - keys.has('KeyQ')) * pace, Math.min(0, 5 - camera.position.y)); // down to 5 m and no lower
+      orbit.target.y += rise; camera.position.y += rise; // both, so the view does not tilt
+    }
     return orbit.update();
   }
   const at = pose(cam.n, S.t);
@@ -324,10 +337,7 @@ function draw3d() {
       built = S.road; held = null;
       build();
       if (keep) { orbit.target.copy(keep[0]); camera.position.copy(keep[1]); } // same race: the view stays where the user put it
-      else {
-        $('follow').replaceChildren(new Option('Follow a car', ''), ...Object.values(S.drivers).map(d => new Option(d.name_acronym, d.driver_number)));
-        setCam('overview', null);
-      }
+      else setCam('overview', null); // the list of cars to follow is filled by render() in app.js, in race order
     }
     marks.visible = opt.sectors;
     $('zin').disabled = $('zout').disabled = $('zfit').disabled = cam.mode !== 'overview';
@@ -352,6 +362,34 @@ $('follow').onchange = e => setCam(e.target.value ? (cam.mode === 'overview' ? '
 $('tower').addEventListener('click', e => { const n = e.target.closest('tr')?.dataset.n; if (n && !$('map3d').hidden) setCam(cam.mode === 'overview' ? 'chase' : cam.mode, n); });
 addEventListener('keydown', e => { if (e.key === 'Escape' && !$('map3d').hidden && cam.mode !== 'overview') setCam('overview'); });
 
+// The movement keys that are held down. e.code, so they are the same keys on any keyboard layout.
+const keys = new Set();
+addEventListener('keydown', e => {
+  if (!/^(Key[WASDQE]|Space)$/.test(e.code) || e.ctrlKey || e.metaKey || e.altKey || $('map3d').hidden) return;
+  if (e.code === 'Space') {
+    if (e.target.closest?.('button, select, input, a')) return; // there, Space presses the control as usual
+    e.preventDefault(); // elsewhere it would scroll the page
+  }
+  keys.add(e.code);
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear()); // a key let go in another window would otherwise stay held
+// A right-drag looks around: the camera stays where it is and turns about the upright line through the ground under it.
+// OrbitControls can only swing the camera round the point it looks at, so this swings that point round the camera instead.
+// The view turns the way the pointer moves, by exactly the angle the pointer crosses.
+let turning = null; // where the pointer was on the last move of a right-drag
+canvas.addEventListener('pointerdown', e => { if (e.button === 2 && cam.mode === 'overview') { turning = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); } });
+canvas.addEventListener('pointermove', e => {
+  if (!turning) return;
+  const k = THREE.MathUtils.degToRad(camera.fov) / canvas.clientHeight;
+  const off = new THREE.Spherical().setFromVector3(camera.position.clone().sub(orbit.target)); // from the point looked at, back to the camera
+  off.theta -= (e.clientX - turning[0]) * k; // drag right to look right, drag down to look down
+  off.phi = Math.max(0.05, Math.min(orbit.maxPolarAngle, off.phi - (e.clientY - turning[1]) * k)); // from straight down to just short of level
+  orbit.target.copy(camera.position).sub(new THREE.Vector3().setFromSpherical(off));
+  turning = [e.clientX, e.clientY];
+});
+canvas.addEventListener('pointerup', () => { turning = null; });
+canvas.addEventListener('pointercancel', () => { turning = null; });
 window.draw3d = draw3d;
 document.querySelector('[data-opt=three]').hidden = false;
 

@@ -759,6 +759,10 @@ function render() {
   const key = ord.map(o => o.n).join();
   if (key !== S.shown.tower) {
     S.shown.tower = key;
+    // The 3D map's list of cars to follow is in race order too; the choice is kept.
+    const f = $('follow'), keep = f.value;
+    f.replaceChildren(new Option('Follow a car', ''), ...ord.map(o => new Option(`${o.p === 99 ? '' : `P${o.p} `}${name(o.n)}`, o.n)));
+    f.value = keep;
     // Where each row is on screen right now, mid-move or not: the slide to its new place starts from there.
     // No slide after a jump on the slider (more than 30 s of race since the last look): the whole order is new then.
     const was = Math.abs(t - S.shown.at) > 30e3 || matchMedia('(prefers-reduced-motion: reduce)').matches ? [] : ord.filter(o => rows[o.n].isConnected).map(o => [rows[o.n], rows[o.n].getBoundingClientRect().top]);
@@ -1042,6 +1046,14 @@ function frame(now) {
 $('play').onclick = () => { if (S) setPlaying(!playing); };
 $('seek').oninput = e => { if (S) S.t = S.t0 + e.target.value * 1000; };
 $('live').onclick = loadLive;
+// The left and right arrow keys step the race back and forward 5 seconds, wherever the focus is.
+addEventListener('keydown', e => {
+  const d = { ArrowLeft: -5e3, ArrowRight: 5e3 }[e.key];
+  if (!d || !S || S.t === undefined || e.ctrlKey || e.metaKey || e.altKey) return;
+  S.t = Math.max(S.t0, Math.min(edge(), S.t + d));
+  $('seek').value = Math.round((S.t - S.t0) / 1000);
+  e.preventDefault(); // or the slider, when it has the focus, would also move by its own 1 second
+});
 // The races scroll sideways with the mouse wheel anywhere on the header (there is no scroll bar).
 document.querySelector('header').addEventListener('wheel', e => {
   if (!e.deltaY || e.ctrlKey) return; // sideways swipes already scroll it; ctrl+wheel is zoom

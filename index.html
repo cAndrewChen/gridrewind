@@ -96,6 +96,10 @@
   #tools { position: absolute; top: 1rem; right: 1rem; display: grid; gap: .3rem; justify-items: end; }
   #cam3 { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .25rem; pointer-events: auto; } /* a row of its own under the lap counter and flags */
   #cam { display: flex; gap: .25rem; }
+  /* Solid, like the map tools: the 3D ground and sky behind them can be any colour. */
+  #cam button { background: var(--fill); color: var(--text); border-radius: .375rem; padding: .4rem .8rem; box-shadow: none; font-weight: 400; }
+  #cam button:active:not(:disabled) { background: var(--fill2); }
+  main:has(#map3d:not([hidden])) #lap { text-shadow: 0 1px .25rem rgba(0, 0, 0, .7); } /* white on a pale sky needs an edge */
   main:has(#map3d:not([hidden])) #tower tr { cursor: pointer; } /* in 3D a click on a driver follows that car */
   #cam button[aria-pressed=true] { background: var(--text); color: #000; }
   #map3d[hidden] ~ #head #cam3 { display: none; } /* #head itself is hidden while a race loads */ /* the camera controls belong to the 3D map */
@@ -228,7 +232,7 @@
     <div id="panels">
       <section id="timing" class="panel cur" data-p="timing" aria-label="Timing" hidden>
         <table>
-          <thead><tr><th>P</th><th>Driver</th><th class="n">Gap</th><th class="n">Int</th><th>Tyre</th><th class="n">Stops</th><th class="n" title="Position after a pit stop made right now">If pits</th></tr></thead>
+          <thead><tr><th>P</th><th>Driver</th><th class="n">Gap</th><th class="n">Interval</th><th>Tyre</th><th class="n">Stops</th><th class="n" title="Position after a pit stop made right now">If pits</th></tr></thead>
           <tbody id="tower"></tbody>
         </table>
       </section>
