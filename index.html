@@ -80,7 +80,7 @@
   /* The map is the page; the lap counter floats on it and the playback bar is docked along its bottom edge. */
   #stage { position: relative; min-height: max(60vh, 22rem); overflow: hidden; }
   canvas { display: block; width: 100%; }
-  #map { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
+  #map, #map3d { position: absolute; inset: 0; height: 100%; scroll-margin-top: 8rem; }
   #head { position: absolute; top: 1rem; left: 1.25rem; right: 5.75rem; /* clear of #tools */ display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; pointer-events: none; }
   #lap { font-size: 1.75rem; font-weight: 600; line-height: 1.1; margin-right: .35rem; font-variant-numeric: tabular-nums; }
   .chip { padding: .1rem .55rem; font-size: .8125rem; font-weight: 700; color: #000; background: var(--green); } /* square: a flag is a rectangle */
@@ -161,11 +161,12 @@
 <main id="main">
   <section id="stage" class="empty" aria-label="Track">
     <canvas id="map" aria-label="Track map with car positions"></canvas>
+    <canvas id="map3d" aria-label="3D track map with car positions" hidden></canvas>
     <div id="head"><strong id="lap"></strong><span id="flag"></span><span id="yellows"></span></div>
     <div id="loading"><span id="loadText">Loading races…</span><div class="prog"><i id="loadBar"></i></div></div>
     <div id="tools">
       <button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button>
-      <button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
+      <button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button>
     </div>
     <div id="controls">
       <button id="play" class="pp" aria-label="Play"></button>
@@ -218,6 +219,8 @@
     </div>
   </div>
 </main>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }</script>
 <script src="app.js"></script>
+<script type="module" src="map3d.js"></script>
 </body>
 </html>

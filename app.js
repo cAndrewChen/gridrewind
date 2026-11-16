@@ -944,7 +944,7 @@ for (const ev of ['pointerdown', 'focusin']) document.addEventListener(ev, e => 
 
 // ---- map view: zoom, pan, and what is drawn on it ----
 const view = { z: 1, x: 0, y: 0 }; // z: 1 shows the whole track; x, y: how far it is dragged, in pixels
-const opt = { sectors: false, names: true, ...JSON.parse(localStorage.mapOpt ?? '{}') };
+const opt = { sectors: false, names: true, three: false, ...JSON.parse(localStorage.mapOpt ?? '{}') };
 // The view at zoom z2 that keeps the point m (pixels from the middle of the map) where it is.
 const zoomAt = (v, m, z2) => ({ z: z2, x: m[0] - (m[0] - v.x) * z2 / v.z, y: m[1] - (m[1] - v.y) * z2 / v.z });
 function setView(v) {
@@ -998,7 +998,9 @@ function frame(now) {
   const i = Math.floor((S.t - S.t0) / CHUNK);
   chunk(i);
   if (playing) chunk(i + 1);
-  draw();
+  const three = !!(opt.three && window.draw3d); // map3d.js sets draw3d only if WebGL and three.js loaded
+  $('map').hidden = three; $('map3d').hidden = !three;
+  if (three) draw3d(); else draw();
   if (now - lastPanel > 250) { lastPanel = now; render(); }
 }
 
