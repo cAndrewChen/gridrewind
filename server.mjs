@@ -15,6 +15,8 @@ const dir = new URL('./recordings/', import.meta.url);
 mkdirSync(dir, { recursive: true });
 
 let key = null, last = 0, lines = []; // the current session and its recorded messages, one JSON string each
+let all = { n: -1, body: '' }; // every message joined, kept for the newcomers who ask for all of them (since=0)
+const CLIP_MAX = 5e6; // bytes; a radio clip is well under 1 MB
 
 // Every message is kept as [topic, data, time] so a viewer who joins late can replay from the start.
 function record(topic, data, time) {
@@ -28,10 +30,12 @@ function record(topic, data, time) {
 
 // Switch to a session, picking up what an earlier run recorded for it.
 function open(info) {
-  if (!info.Key || info.Key === key) return;
-  key = info.Key;
+  // The key names a file, so it must be a plain number: the feed is unofficial and could send anything.
+  if (!/^\d+$/.test(info.Key) || String(info.Key) === key) return;
+  key = String(info.Key);
   const file = new URL(`${key}.jsonl`, dir);
   lines = existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+  all = { n: -1, body: '' };
   console.log(`session ${key}: ${info.Meeting?.Name} ${info.Name}, ${lines.length} messages on disk`);
 }
 
@@ -42,7 +46,7 @@ function snapshot(state) {
   // Between sessions the feed still shows the last one. Stamping that with today's time would
   // corrupt the timeline, so a finished session is only ever served from what was recorded live.
   if (/Finalised|Ends/.test(info.SessionStatus)) {
-    if (existsSync(new URL(`${info.Key}.jsonl`, dir))) open(info);
+    if (/^\d+$/.test(info.Key) && existsSync(new URL(`${info.Key}.jsonl`, dir))) open(info);
     else console.log(`no live session (last: ${info.Meeting?.Name} ${info.Name}); waiting for the next one`);
     return;
   }
@@ -85,11 +89,11 @@ async function reference(info) {
     const totals = async table => scored
       ? (await get(`${table}?session_key=${scored.session_key}`)).map(r => ({ ...r, points_start: r.points_current })) : [];
     const ref = { track, champD: await totals('championship_drivers'), champT: await totals('championship_teams') };
-    if (info.Key === key) record('Ref', ref, new Date().toISOString());
+    if (String(info.Key) === key) record('Ref', ref, new Date().toISOString());
     console.log(`reference data stored: ${track ? `lap from session ${here.session_key}` : 'no lap found'}, ${ref.champD.length} drivers in the standings`);
   } catch (err) {
     console.log(`reference data failed (${err.message}); trying again in 10 minutes`);
-    setTimeout(() => { if (info.Key === key) reference(info); }, 10 * 60e3);
+    setTimeout(() => { if (String(info.Key) === key) reference(info); }, 10 * 60e3);
   }
 }
 
@@ -117,7 +121,7 @@ async function connect() {
           if (m.type === 1 && m.target === 'feed') {
             const [topic, data, time] = m.arguments;
             // A new session sends only changes; reconnecting gets its full state.
-            if (topic === 'SessionInfo' && data.Key && data.Key !== key) ws.close();
+            if (topic === 'SessionInfo' && data.Key && String(data.Key) !== key) ws.close();
             else record(topic, data, time);
           }
           if (m.type === 7) ws.close();
@@ -135,13 +139,19 @@ async function connect() {
 }
 
 createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); } catch { /* a path such as // is not a valid address */ }
+  if (!url) { res.writeHead(400); return res.end('Bad request'); }
   res.setHeader('access-control-allow-origin', 'https://candrewchen.github.io'); // the GitHub Pages copy reads /live and /radio
   if (url.pathname === '/live') {
     const since = Math.max(0, parseInt(url.searchParams.get('since'), 10) || 0);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     // shortcut: "live" is any message in the last minute, so a long silence in a stopped session reads as not live; use SessionStatus if that matters.
-    return res.end(`{"key":${key},"live":${Date.now() - last < 60e3},"next":${lines.length},"lines":[${lines.slice(since).join(',')}]}`);
+    // A newcomer asks for everything, which late in a race is many MB: join it once per new message, not once per request.
+    if (since === 0 && all.n !== lines.length) all = { n: lines.length, body: lines.join(',') };
+    const body = since === 0 ? all.body : lines.slice(since).join(',');
+    // shortcut: no rate limit here, since behind the VM's proxy every request comes from 127.0.0.1; limit per IP in the proxy if /live is abused.
+    return res.end(`{"key":${key},"live":${Date.now() - last < 60e3},"next":${lines.length},"lines":[${body}]}`);
   }
   if (url.pathname === '/radio') {
     // F1's server does not let a web page read its radio clips, only play them. The page gets a clip
@@ -152,8 +162,11 @@ createServer((req, res) => {
       res.writeHead(400);
       return res.end('Not a radio clip');
     }
-    fetch(clip).then(async r => {
+    // No redirects (they could lead anywhere) and nothing larger than a clip can be.
+    fetch(clip, { redirect: 'error' }).then(async r => {
+      if (Number(r.headers.get('content-length')) > CLIP_MAX) throw new Error('too large');
       const body = Buffer.from(await r.arrayBuffer());
+      if (body.length > CLIP_MAX) throw new Error('too large');
       res.writeHead(r.ok ? 200 : 502, { 'content-type': 'audio/mpeg' });
       res.end(body);
     }).catch(() => { res.writeHead(502); res.end(); });
