@@ -136,6 +136,7 @@ async function connect() {
 
 createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  res.setHeader('access-control-allow-origin', 'https://candrewchen.github.io'); // the GitHub Pages copy reads /live and /radio
   if (url.pathname === '/live') {
     const since = Math.max(0, parseInt(url.searchParams.get('since'), 10) || 0);
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });

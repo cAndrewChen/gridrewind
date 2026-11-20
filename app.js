@@ -1,5 +1,7 @@
 // F1 race replay on the free OpenF1 API (historical data, 2023 onwards), plus a live mode fed by server.mjs.
 const API = 'https://api.openf1.org/v1/';
+// Live mode and transcripts need server.mjs: the copy on GitHub Pages asks the one on the VM.
+const SERVER = location.hostname.endsWith('.github.io') ? 'https://gridrewind.duckdns.org/' : '';
 const FREE_AFTER = 30 * 60e3; // OpenF1 charges for data until 30 min after a session ends
 const CHUNK = 5 * 60e3;       // car positions are fetched in 5-minute pieces (about 3 MB each)
 const STALE = 3 * 60e3;       // a gap older than this belongs to a stopped car
@@ -897,7 +899,7 @@ async function loadLive() {
   say('Connecting to the live recording…');
   while (S === s) {
     try {
-      const r = await fetch(`live?since=${s.next}`);
+      const r = await fetch(`${SERVER}live?since=${s.next}`);
       if (!r.ok) throw new Error(`The live server answered ${r.status}`);
       const { key, next, lines } = await r.json();
       if (S !== s) return;
@@ -1127,7 +1129,7 @@ async function next() {
       ears = new Worker(URL.createObjectURL(new Blob([HEAR], { type: 'text/javascript' })), { type: 'module' });
       ears.addEventListener('message', e => { if (e.data.ready) { modelReady = true; redraw(); } });
     }
-    const r = await fetch(`radio?u=${encodeURIComponent(job.url)}`);
+    const r = await fetch(`${SERVER}radio?u=${encodeURIComponent(job.url)}`);
     if (!r.ok) throw new Error(`the clip answered ${r.status}`);
     // Decoding into a 16 kHz context re-samples the clip to what the model expects.
     const sound = (await new OfflineAudioContext(1, 1, 16000).decodeAudioData(await r.arrayBuffer())).getChannelData(0);
@@ -1205,7 +1207,7 @@ requestAnimationFrame(frame);
 showYear(new Date().getFullYear());
 // The Live button and radio transcripts only exist when the page is served by server.mjs.
 // The button says whether a session is on right now; it is asked again each minute.
-const liveNow = () => fetch('live?since=999999999').then(async r => {
+const liveNow = () => fetch(`${SERVER}live?since=999999999`).then(async r => {
   const b = $('live'), was = served;
   b.hidden = !r.ok; served = r.ok;
   if (r.ok) {
