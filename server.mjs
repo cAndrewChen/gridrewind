@@ -6,6 +6,10 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 
 const PORT = 8765;
 const HUB = 'livetiming.formula1.com/signalrcore';
+// F1's CDN answers 403 to cloud servers (the Oracle VM). There, F1_RELAY names a Cloudflare Worker running
+// relay-worker.js and F1_RELAY_KEY its RELAY_KEY, and the feed comes through Cloudflare instead.
+const RELAY = process.env.F1_RELAY?.replace(/\/+$/, ''), RELAY_KEY = process.env.F1_RELAY_KEY ?? '';
+const via = RELAY ? { 'x-relay-key': RELAY_KEY } : {};
 // SessionInfo first: it names the session, and nothing is recorded before it.
 const TOPICS = ['SessionInfo', 'SessionData', 'DriverList', 'LapCount', 'TimingData', 'TimingAppData',
   'RaceControlMessages', 'TeamRadio', 'PitLaneTimeCollection'];
@@ -168,18 +172,19 @@ async function reference(info) {
 
 async function connect() {
   try {
-    const r = await fetch(`https://${HUB}/negotiate?negotiateVersion=1`, { method: 'POST' });
+    const r = await fetch(RELAY ? `${RELAY}/negotiate` : `https://${HUB}/negotiate?negotiateVersion=1`, { method: 'POST', headers: via });
     if (!r.ok) throw new Error(`negotiate answered ${r.status}`);
     const cookie = r.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
     const { connectionToken } = await r.json();
-    const ws = new WebSocket(`wss://${HUB}?id=${encodeURIComponent(connectionToken)}`, { headers: { Cookie: cookie } });
+    const id = encodeURIComponent(connectionToken);
+    const ws = new WebSocket(RELAY ? `${RELAY.replace(/^http/, 'ws')}/?id=${id}` : `wss://${HUB}?id=${id}`, { headers: { Cookie: cookie, ...via } });
     const send = m => ws.send(JSON.stringify(m) + '\x1e');
     let ping;
     ws.onopen = () => {
       send({ protocol: 'json', version: 1 });
       send({ type: 1, invocationId: '1', target: 'Subscribe', arguments: [TOPICS] });
       ping = setInterval(() => send({ type: 6 }), 15000); // the hub drops clients that stay silent
-      console.log('connected to the F1 feed');
+      console.log(`connected to the F1 feed${RELAY ? ` through ${RELAY}` : ''}`);
     };
     ws.onmessage = e => {
       for (const part of String(e.data).split('\x1e')) {
