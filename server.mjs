@@ -59,6 +59,66 @@ function snapshot(state) {
 // "Ref" message: a reference lap of this circuit (for the estimated map) and the standings before
 // this session, sprint points included. Start the server at least 30 minutes before a session:
 // OpenF1's free tier may refuse requests while one is live.
+// While a session is live OpenF1 refuses everyone without a key, so a server started then gets no lap
+// from it. This builds a stand-in from MultiViewer's free circuit outline (F1's own coordinates, starting
+// at the timing line) and times it with a simple lap model: each bend's speed from its curvature, then
+// limits on accelerating and braking. calibrate() in app.js corrects the times from real mini-sectors.
+// shortcut: the sector split is a guess of thirds, so the sector lines on the map are approximate; take
+// the real split from the feed's sector times if they matter.
+async function outline(circuit) {
+  const r = await fetch(`https://api.multiviewer.app/api/v1/circuits/${circuit}/${new Date().getUTCFullYear()}`,
+    { headers: { 'user-agent': 'f1-replay' } });
+  if (!r.ok) throw new Error(`MultiViewer answered ${r.status}`);
+  const { x, y } = await r.json();
+  if (!(x?.length > 50)) throw new Error('MultiViewer has no outline');
+  // Points every 5 m (50 units) round the closed loop.
+  const raw = x.map((v, i) => ({ x: v, y: y[i] })), pts = [];
+  raw.push(raw[0]);
+  for (let i = 1, carry = 0; i < raw.length; i++) {
+    const a = raw[i - 1], b = raw[i], d = Math.hypot(b.x - a.x, b.y - a.y);
+    for (let s = carry; s < d; s += 50) pts.push({ x: a.x + (b.x - a.x) * s / d, y: a.y + (b.y - a.y) * s / d });
+    carry = (carry - d) % 50; if (carry < 0) carry += 50;
+  }
+  const n = pts.length, ds = 5; // metres between points
+  const ring = i => (i % n + n) % n;
+  // The outline is a polyline with a corner every 10 m or so: smooth it over ±15 m first, or every
+  // vertex reads as a little bend.
+  const sm = pts.map((_, i) => {
+    let x = 0, y = 0;
+    for (let j = -3; j <= 3; j++) { x += pts[ring(i + j)].x; y += pts[ring(i + j)].y; }
+    return { x: x / 7, y: y / 7 };
+  });
+  // Curvature (1/m) from the circle through points 25 m either side, then averaged over ±20 m with
+  // weights that fade out, so speed changes evenly through a corner instead of in steps.
+  const bend = sm.map((_, i) => {
+    const a = sm[ring(i - 5)], b = sm[i], c = sm[ring(i + 5)];
+    const cross = Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+    const abc = Math.hypot(b.x - a.x, b.y - a.y) * Math.hypot(c.x - b.x, c.y - b.y) * Math.hypot(c.x - a.x, c.y - a.y);
+    return abc ? 2 * cross / abc * 10 : 0; // positions are in 1/10 m
+  });
+  const kappa = bend.map((_, i) => {
+    let sum = 0, w = 0;
+    for (let j = -4; j <= 4; j++) { const f = 5 - Math.abs(j); sum += bend[ring(i + j)] * f; w += f; }
+    return sum / w;
+  });
+  // Grip grows with speed (downforce): lateral 1.5 g plus 2.5 g × (v/VMAX)², so v² κ = that gives the
+  // corner speed directly. Braking also grows with speed; accelerating fades towards top speed.
+  const G = 9.81, VMAX = 95; // m/s: a low-downforce car on a long straight
+  const v = kappa.map(k => { const d = k - 2.5 * G / VMAX ** 2; return d > 0 ? Math.min(VMAX, Math.sqrt(1.5 * G / d)) : VMAX; });
+  const acc = u => 12 * (1 - u / VMAX), brake = u => G * (2 + 3 * (u / VMAX) ** 2);
+  for (let pass = 0; pass < 2; pass++) { // twice round, so the limits carry over the line
+    for (let i = 1; i <= n; i++) { const k = i % n, p = v[i - 1]; v[k] = Math.min(v[k], Math.sqrt(p * p + 2 * acc(p) * ds)); }
+    for (let i = n - 2; i >= -1; i--) { const k = ring(i), q = v[ring(k + 1)]; v[k] = Math.min(v[k], Math.sqrt(q * q + 2 * brake(q) * ds)); }
+  }
+  let t = 0;
+  const out = sm.map((p, i) => { // timed over the real spacing: smoothing draws corner points closer together
+    const pt = { t, x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 }, q = sm[ring(i + 1)];
+    t += Math.hypot(q.x - p.x, q.y - p.y) / 10 / ((v[i] + v[ring(i + 1)]) / 2) * 1000;
+    return pt;
+  });
+  return { lap: t, s1: t / 3, s2: t / 3, pts: out, estimated: true };
+}
+
 async function reference(info) {
   const get = async path => {
     await new Promise(r => setTimeout(r, 400)); // free tier: 3 requests a second
@@ -93,6 +153,15 @@ async function reference(info) {
     console.log(`reference data stored: ${track ? `lap from session ${here.session_key}` : 'no lap found'}, ${ref.champD.length} drivers in the standings`);
   } catch (err) {
     console.log(`reference data failed (${err.message}); trying again in 10 minutes`);
+    if (!lines.some(l => l.startsWith('["Ref"'))) {
+      try {
+        const track = await outline(info.Meeting.Circuit.Key);
+        if (String(info.Key) === key) record('Ref', { track, champD: [], champT: [] }, new Date().toISOString());
+        console.log(`estimated reference lap stored from MultiViewer's outline (${track.pts.length} points, ${(track.lap / 1000).toFixed(1)} s)`);
+      } catch (e) {
+        console.log(`no estimated reference lap either (${e.message})`);
+      }
+    }
     setTimeout(() => { if (String(info.Key) === key) reference(info); }, 10 * 60e3);
   }
 }

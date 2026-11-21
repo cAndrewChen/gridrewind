@@ -133,6 +133,14 @@
   #seek::-moz-range-progress { height: .25rem; border-radius: 99px; background: var(--text); }
   #seek::-moz-range-thumb { width: .875rem; height: .875rem; border: 0; border-radius: 50%; background: #fff; }
   #clock { font-variant-numeric: tabular-nums; min-width: 4.5em; text-align: right; font-weight: 600; }
+  #delay { font-size: .8125rem; color: var(--dim); font-variant-numeric: tabular-nums; }
+  #delay[aria-pressed=true] { color: var(--text); background: var(--fill2); }
+  #liveNote { position: absolute; left: 1.25rem; right: 1.25rem; bottom: 4.5rem; max-width: 26rem; margin: 0 0 0 auto; display: flex; gap: .5rem; align-items: flex-start; padding: .75rem .5rem .75rem 1rem; border-radius: .75rem; background: var(--solid); font-size: .875rem; line-height: 1.4; }
+  #liveNote[hidden] { display: none; }
+  #liveNote p { margin: 0; flex: 1; }
+  #liveNoteX { padding: 0; width: 1.75rem; height: 1.75rem; flex: none; background: none; color: var(--dim); font-size: 1.125rem; line-height: 1; }
+  #toLive { font-size: .8125rem; }
+  #stage.empty #liveNote { display: none; }
 
   /* Every column has a set width, so nothing shifts as the numbers change. The first row sets them. */
   table { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; font-stretch: 92%; }
@@ -216,10 +224,13 @@
       <div><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out" disabled>−</button><button id="zfit" aria-label="Show the whole track" disabled>Fit</button></div>
       <div><button data-opt="three" aria-pressed="false" hidden>3D</button><button data-opt="sectors" aria-pressed="false">Sectors</button><button data-opt="names" aria-pressed="true">Names</button></div>
     </div>
+    <div id="liveNote" role="status" hidden><p>True live: the cars are predicted ahead of the latest timing data, so their positions can be less accurate. The delayed view fits them to real mini-sector times.</p><button id="liveNoteX" aria-label="Close">×</button></div>
     <div id="controls">
       <button id="play" class="pp" aria-label="Play"></button>
       <input id="seek" type="range" min="0" step="1" value="0" aria-label="Race time">
       <output id="clock"></output>
+      <button id="toLive" hidden>Jump to live</button>
+      <button id="delay" aria-pressed="false" hidden title="The live view waits until every car has finished its mini-sector. Click for true live."></button>
       <select id="speed" aria-label="Playback speed">
         <option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="5">5x</option><option value="20">20x</option><option value="60">60x</option>
       </select>

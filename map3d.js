@@ -229,12 +229,26 @@ function carModel(d) {
 
 const yawOf = (from, to) => Math.atan2(to[1] - from[1], to[0] - from[0]); // which way a car that went from -> to is pointing
 
+// Which way car n points at time t: along its path from about 4 m behind it to 4 m ahead, found fresh
+// every frame. Measured over a distance rather than a time, it does not wiggle in slow corners, where
+// a car covers so little ground in a fixed time that small noise in its position swings the heading.
+const SPAN = 40; // 4 m either side; positions are in 1/10 m
+function heading(n, t, xy) {
+  let a = xy, b = xy;
+  for (let dt = 25; dt <= 1000; dt += 25) {
+    if (Math.hypot(xy[0] - a[0], xy[1] - a[1]) < SPAN) a = carXY(n, t - dt) ?? a;
+    if (Math.hypot(b[0] - xy[0], b[1] - xy[1]) < SPAN) b = carXY(n, t + dt) ?? b;
+    if (Math.hypot(xy[0] - a[0], xy[1] - a[1]) >= SPAN && Math.hypot(b[0] - xy[0], b[1] - xy[1]) >= SPAN) break;
+  }
+  return Math.hypot(b[0] - a[0], b[1] - a[1]) > 10 ? yawOf(a, b) : null; // under 1 m in 2 s: stopped
+}
+
 // Where car n is at time t and which way it points: { p, yaw }, or null if it is not on the track.
 function pose(n, t) {
   const xy = carXY(n, t), car = cars[n];
   if (!xy || !car || gone(n, t)) return null;
-  const was = carXY(n, t - 100);
-  if (was && Math.hypot(xy[0] - was[0], xy[1] - was[1]) > 1) car.userData.yaw = yawOf(was, xy); // a stopped car keeps pointing where it was
+  const yaw = heading(n, t, xy);
+  if (yaw !== null) car.userData.yaw = yaw; // a stopped car keeps pointing where it was
   return { p: V(xy[0], xy[1], heightAt(xy[0], xy[1])), yaw: car.userData.yaw };
 }
 

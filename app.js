@@ -34,9 +34,15 @@ async function api(path) {
   for (let i = 1; i <= 5; i++) {
     nextAt = Math.max(Date.now(), nextAt + 340);
     await sleep(nextAt - Date.now());
-    const r = await fetch(API + path);
+    // While any session is live, OpenF1 answers 401 to every request without a key, past races
+    // included, and without the header that lets a page read it, so fetch only reports a network error.
+    const blocked = 'Replays unavailable during live session';
+    const r = await fetch(API + path).catch(() => {
+      throw new Error(navigator.onLine === false ? 'You are offline.' : blocked);
+    });
     if (r.status === 429) { await sleep(3000 * i); continue; }
     if (r.status === 404) return []; // OpenF1 answers 404 for "no rows" (not cached: the rows may come later)
+    if (r.status === 401) throw new Error(blocked);
     if (!r.ok) throw new Error(`OpenF1 answered ${r.status}`);
     store?.put(API + path, r.clone()).catch(() => {}); // a full disk must not break the replay
     return r.json();
@@ -262,6 +268,11 @@ function chunk(i) {
 
 function carXY(num, t) {
   if (S.live) {
+    if (S.timed) { // practice: a car in the pits may sit in its garage for many minutes, so leave it off the map
+      const pit = at(S.pitT[num], t), ev = S.prog[num];
+      if (pit?.in) return;
+      if (pit && !(ev && ev[idx(ev, t)]?.t > pit.t)) return; // back on track once it finishes a mini-sector
+    }
     const P = liveP(num, t);
     return P === undefined ? undefined : traceXY(S.ref, P);
   }
@@ -458,15 +469,21 @@ function traceXY({ pts, lap }, share) {
 // base: index of each sector's first mini-sector; K: mini-sectors per lap.
 function progress(raw, base, K) {
   const out = [];
-  let lap = 0, last = -1;
+  let lap = 0, last = -1, lastT = -Infinity, reset = false;
   for (const e of raw) {
+    if (e.reset) { reset = true; continue; }
     const k = base[e.i] + e.j;
     if (!(k < K)) continue;
     if (k <= last) {
-      if (last - k < K / 2) continue; // the same mini-sector reported again
-      lap++;                          // a big step back is the start of a new lap
+      // The feed also re-sends mini-sectors the car finished earlier in the lap (when their colour
+      // changes). A real new lap comes with the car's other mini-sectors cleared (e.reset; the clear
+      // can come twice, so only once the car is past half the lap); failing that, the first
+      // mini-sector right after the last ones, or any step back after a long silence.
+      const lapped = (reset && last >= K / 2) || (k === 0 && last >= K - 2) || e.t - lastT > 180e3;
+      if (!lapped) continue; // a mini-sector reported again
+      lap++;
     }
-    last = k;
+    last = k; lastT = e.t; reset = false;
     if (out.length && e.t <= out.at(-1).t) Object.assign(out.at(-1), { lap, k }); // two in one message: keep the later one
     else out.push({ t: e.t, lap, k });
   }
@@ -591,7 +608,7 @@ function draw() {
   g.fillStyle = INK.dim;
   g.font = `13px ${FONT}`;
 
-  if (S.live) note('Estimated positions (from mini-sector times)');
+  if (S.live) note(S.trueLive ? 'True live: positions predicted ahead of the timing data' : 'Estimated positions (from mini-sector times)');
   else if (!S.loc[Math.floor((S.t - S.t0) / CHUNK)]) return note('Loading car positions…');
 
   for (const n of duo) { // the path each of the two cars took over the last 5 seconds
@@ -689,7 +706,7 @@ function renderPits(t) {
   $('pitText').textContent = laps.length < 2 ? 'No laps yet.' : '';
   if (laps.length < 2) return void ($('pitChart').innerHTML = '');
   const secs = laps.map(l => l[1]), lo = Math.min(...secs), hi = Math.max(lo + 1, Math.min(Math.max(...secs), median(secs) * 1.15));
-  const L = 52, R = 432, T = 22, B = 172, last = Math.max(S.totalLaps || 0, laps.at(-1)[0], 2);
+  const L = 52, R = 432, T = 22, B = 172, last = Math.max(+S.totalLaps || 0, laps.at(-1)[0], 2); // practice has no lap count ('?')
   const X = lap => L + (R - L) * (lap - 1) / (last - 1), Y = v => B - (B - T) * (Math.min(v, hi) - lo) / (hi - lo);
   const stints = (S.stints[n] ?? []).filter(Boolean);
   const stops = (S.pits[n] ?? []).filter(p => p.t <= t).map(p => at(S.laps[n], p.t)?.n).filter(Boolean).map(lap => {
@@ -738,7 +755,9 @@ function render() {
     `<li class="${o.position <= 3 ? 'key' : ''}"><button data-ot="${o.i}">Watch</button><time>${clock(o.t)}</time>${esc(name(o.overtaking_driver_number))} ` +
     (o.position === 1 ? `took the lead from ${esc(name(o.overtaken_driver_number))}` : `passed ${esc(name(o.overtaken_driver_number))} for P${esc(o.position)}`) + '</li>');
 
-  // Timing tower.
+  // Timing tower. Practice and qualifying show each driver's best lap and the gap to the fastest.
+  const head = $('tower').previousElementSibling.rows[0].cells;
+  [head[2].textContent, head[3].textContent] = S.timed ? ['Best lap', 'Gap'] : ['Gap', 'Interval'];
   const gaps = {};
   for (const { n } of ord) {
     const i = at(S.intv[n], t);
@@ -760,7 +779,8 @@ function render() {
     rows[n].style.setProperty('--team', `#${d.team_colour || '999'}`);
     rows[n].dataset.n = n; // map3d.js follows the car whose row is clicked
     rows[n].innerHTML = dnf ? `<td></td><td>${esc(d.name_acronym)}</td><td class="n">${dnf}</td><td colspan="2"></td>` : `<td>${p === 99 ? '' : p}</td><td>${esc(d.name_acronym)}</td>` +
-      `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td><td>${tyre}</td>`;
+      (S.timed ? `<td class="n">${esc(at(S.best[n], t)?.lap ?? '')}</td><td class="n">${esc(at(S.best[n], t)?.diff ?? '')}</td>`
+               : `<td class="n">${fmtGap(gaps[n]?.gap)}</td><td class="n">${fmtGap(gaps[n]?.int)}</td>`) + `<td>${tyre}</td>`;
     if (!dnf) pit += `<tr><td>${p === 99 ? '' : p}</td><td><span class="bar" style="background:#${esc(d.team_colour || '999')}"></span>${esc(d.name_acronym)}</td><td class="n">${stops}</td><td class="n">${after}</td></tr>`;
   }
   $('pitRows').innerHTML = pit;
@@ -817,7 +837,7 @@ function ingest(s, [topic, d, time]) {
     if (d.Key) s.key = d.Key;
     if (d.Path) s.path = d.Path;
     if (d.Meeting?.Circuit?.ShortName) s.circuit = d.Meeting.Circuit.ShortName;
-    if (d.Name) { s.title = `${d.Meeting?.Name ?? ''} ${d.Name}`; s.pts = { Race: PTS, Sprint: SPRINT_PTS }[d.Name]; }
+    if (d.Name) { s.title = `${d.Meeting?.Name ?? ''} ${d.Name}`; s.pts = { Race: PTS, Sprint: SPRINT_PTS }[d.Name]; s.timed = !s.pts; }
   }
   if (topic === 'Ref') { // added by server.mjs: a reference lap of this circuit and the standings before this session
     s.champD = d.champD ?? []; s.champT = d.champT ?? [];
@@ -842,9 +862,20 @@ function ingest(s, [topic, d, time]) {
       add(s.intv, n, { t, gap: gap !== undefined ? parseGap(gap) : prev?.gap, int: int !== undefined ? parseGap(int) : prev?.int });
     }
     if (v.NumberOfLaps >= (s.laps[n]?.at(-1)?.n ?? 0)) add(s.laps, n, { t, n: v.NumberOfLaps + 1 });
+    // Practice and qualifying: best lap and the gap to the fastest one instead of race gaps.
+    const bestLap = v.BestLapTime?.Value, diff = v.TimeDiffToFastest;
+    if (bestLap !== undefined || diff !== undefined) {
+      const prev = s.best[n]?.at(-1);
+      add(s.best, n, { t, lap: bestLap ?? prev?.lap ?? '', diff: diff ?? prev?.diff ?? '' });
+    }
+    if (typeof v.InPit === 'boolean' && v.InPit !== s.pitT[n]?.at(-1)?.in) add(s.pitT, n, { t, in: v.InPit }); // changes only: the flag is re-sent
     for (let k = s.pits[n]?.length ?? 0; k < v.NumberOfPitStops; k++) add(s.pits, n, { t });
     if (v.Retired) s.out[n] ??= { due: t };
     // Mini-sectors: a status that is not 0 means the car has just finished that one.
+    // The car crossed the line: the feed clears its other mini-sectors (status 0) at the same time.
+    let cleared = 0;
+    each(v.Sectors, (i, sec) => { if (!Array.isArray(sec.Segments)) each(sec.Segments, (j, seg) => { if (seg.Status === 0) cleared++; }); });
+    if (cleared >= 3) add(s.seg, n, { t, reset: true });
     each(v.Sectors, (i, sec) => {
       if (Array.isArray(sec.Segments)) return void (s.segs[i] = Math.max(s.segs[i] ?? 0, sec.Segments.length)); // the full state only tells how many there are
       each(sec.Segments, (j, seg) => {
@@ -883,16 +914,49 @@ function settle(s) {
   for (let i = 0; i < 3; i++) for (let j = 1; j <= c[i]; j++) guess.push(ends[i] + (ends[i + 1] - ends[i]) * j / c[i]);
   s.prog = Object.fromEntries(Object.entries(s.seg).map(([n, raw]) => [n, progress(raw, base, K)]));
   s.F = calibrate(s.prog, K, guess);
+  // The live view runs behind the clock so that every car has already finished the mini-sector it is
+  // drawn in, and its position is fitted between two real times instead of predicted: the delay is the
+  // longest mini-sector the cars have taken this session (95th percentile, so a car crawling to the
+  // pits does not set it), plus 3 s for the feed's own lag: conservative, so it rarely needs to change.
+  // It is set once there are a few laps of data, then raised whenever it is too short, never lowered.
+  const took = [];
+  for (const ev of Object.values(s.prog)) for (let i = 1; i < ev.length; i++) if (ev[i].t - ev[i - 1].t < 60e3) took.push(ev[i].t - ev[i - 1].t);
+  if (took.length >= 300) {
+    took.sort((a, b) => a - b);
+    const d = Math.min(Math.ceil((took[Math.floor(took.length * 0.95)] + 3e3) / 1e3) * 1e3, 40e3); // whole seconds
+    if (!s.delaySet || d > s.delay) { s.delay = Math.max(d, 5e3); s.delaySet = true; }
+  }
 }
 
 // The time "now" in a live session: it follows the clock between messages, at most 10 s past the last one.
 const edge = () => S.live ? Math.min(Date.now() + S.skew, S.t1 + 10e3) : S.t1;
+// The newest moment shown: in a live session, the delay behind the edge unless the viewer chose true live.
+const shown = () => S.live && !S.trueLive ? edge() - S.delay : edge();
+
+// True live: positions are predicted past the newest timing data. It is picked with the button on the
+// playback bar or by dragging the slider past the delayed edge, and says so in a note on the map.
+function setTrueLive(on) {
+  if (!S?.live || S.trueLive === on) return;
+  S.trueLive = on;
+  clearTimeout(setTrueLive.timer);
+  $('liveNote').hidden = !on;
+  if (on) setTrueLive.timer = setTimeout(() => { $('liveNote').hidden = true; }, 8000);
+}
+function showDelay() {
+  const b = $('delay');
+  if (!S?.trueLive) $('liveNote').hidden = true; // also when another session or race is opened
+  b.hidden = !S?.live || S.t === undefined;
+  b.textContent = S?.trueLive ? 'True live' : `${Math.round((S?.delay ?? 0) / 1000)} s delay`;
+  b.setAttribute('aria-pressed', !!S?.trueLive);
+  // Jump to live: shown once the view is more than 2 s behind the viewer's chosen live edge.
+  $('toLive').hidden = b.hidden || shown() - S.t < 2e3;
+}
 
 async function loadLive() {
   ++loadId; // drops a race that is still loading
   setPlaying(false);
   const s = S = { live: true, next: 0, drivers: {}, laps: {}, pos: {}, intv: {}, stints: {}, pits: {}, rcAll: {}, radioAll: {}, lane: {},
-    seg: {}, segs: [], prog: {}, F: [], fix: {}, out: {}, skew: -Infinity,
+    seg: {}, segs: [], prog: {}, F: [], fix: {}, out: {}, skew: -Infinity, best: {}, pitT: {}, delay: 10e3, trueLive: false,
     rc: [], radio: [], overtakes: [], champD: [], champT: [], totalLaps: '?', shown: {} };
   blank();
   $('loading').hidden = true;
@@ -914,8 +978,8 @@ async function loadLive() {
         showPitLoss();
         $('champ').hidden = !s.champD.length;
         $('seek').max = Math.round((s.t1 - s.t0) / 1000);
-        if (s.t === undefined) { // first data: jump to the live edge and follow it
-          s.t = edge();
+        if (s.t === undefined) { // first data: jump to the (delayed) live edge and follow it
+          s.t = shown();
           $('stage').classList.remove('empty');
           for (const id of ['timing', 'more', 'rcBox', 'radioBox']) $(id).hidden = false;
           setPlaying(true);
@@ -1031,11 +1095,15 @@ let last = 0, lastPanel = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   for (const m of menus) m.show(); // a value set by the code shows at once
-  const dt = Math.min(now - last, 100); // a background tab must not jump the race ahead
+  // A background tab must not jump a replay ahead; a live view keeps to the clock however slowly it is drawn.
+  const dt = S?.live ? now - last : Math.min(now - last, 100);
   last = now;
   if (!S || S.t === undefined) return;
   if (playing) {
-    S.t = Math.min(S.t + dt * $('speed').value, edge());
+    const end = shown(), next = S.t + dt * $('speed').value;
+    // When the live delay grows the view is ahead of where it should be: it carries on at half speed
+    // until the delayed edge catches up, so no car ever drives backwards.
+    S.t = next <= end ? next : S.t <= end ? end : S.live ? S.t + (next - S.t) / 2 : end;
     $('seek').value = Math.round((S.t - S.t0) / 1000);
     if (S.t >= S.t1 && !S.live) setPlaying(false); // a live session keeps growing
   }
@@ -1048,17 +1116,29 @@ function frame(now) {
   if (!three && $('map').hidden) setView(view); // back from 3D: the zoom buttons are the flat map's again
   $('map').hidden = three; $('map3d').hidden = !three;
   if (three) draw3d(); else draw();
-  if (now - lastPanel > 250) { lastPanel = now; render(); }
+  if (now - lastPanel > 250) { lastPanel = now; render(); showDelay(); }
 }
 
 $('play').onclick = () => { if (S) setPlaying(!playing); };
-$('seek').oninput = e => { if (S) S.t = S.t0 + e.target.value * 1000; };
+$('seek').oninput = e => {
+  if (!S) return;
+  S.t = S.t0 + e.target.value * 1000;
+  if (S.live && S.t > edge() - S.delay) setTrueLive(true); // past the delayed edge is true live; going back keeps the choice
+};
+$('toLive').onclick = () => { if (S?.live) { S.t = shown(); setPlaying(true); } };
+$('liveNoteX').onclick = () => { clearTimeout(setTrueLive.timer); $('liveNote').hidden = true; };
+$('delay').onclick = () => {
+  if (!S?.live) return;
+  setTrueLive(!S.trueLive);
+  S.t = shown(); // straight to the edge of the chosen view
+  setPlaying(true);
+};
 $('live').onclick = loadLive;
 // The left and right arrow keys step the race back and forward 5 seconds, wherever the focus is.
 addEventListener('keydown', e => {
   const d = { ArrowLeft: -5e3, ArrowRight: 5e3 }[e.key];
   if (!d || !S || S.t === undefined || e.ctrlKey || e.metaKey || e.altKey) return;
-  S.t = Math.max(S.t0, Math.min(edge(), S.t + d));
+  S.t = Math.max(S.t0, Math.min(shown(), S.t + d));
   $('seek').value = Math.round((S.t - S.t0) / 1000);
   e.preventDefault(); // or the slider, when it has the focus, would also move by its own 1 second
 });
@@ -1194,11 +1274,13 @@ console.assert(tidy(' [BLANK_AUDIO] Box, box. (engine) ') === 'Box, box.' && tid
 }
 console.assert(rejoin(0, 20, [5, 19.9, 20.1, Infinity]) === 3 && rejoin(10, 20, [0, 40]) === 2, 'rejoin');
 console.assert(parseGap('+1.234') === 1.234 && parseGap('LAP 12') === 0 && parseGap('1L') === '1L', 'parseGap');
-{ // 4 mini-sectors a lap: a repeat is dropped, a step back starts a new lap, and timing is learnt from clean laps
+{ // 4 mini-sectors a lap: a repeat or a re-send is dropped, a step back to the start begins a new lap, and timing is learnt from clean laps
   const raw = [], gaps = [10, 30, 20, 40]; // every lap: 100 time units, mini-sectors ending at 10, 40, 60, 100
   for (let lap = 0, t = 0; lap < 5; lap++) gaps.forEach((gap, j) => raw.push({ t: t += gap, i: 0, j }));
   raw.splice(2, 0, { ...raw[1] });
-  const p = progress(raw, [0], 4);
+  const p = progress([...raw.slice(0, 9), { t: 201, i: 0, j: 1 }, ...raw.slice(9)], [0], 4); // mini-sector 1 re-sent at the end of a lap
+  const q = progress([{ t: 1, i: 0, j: 2 }, { t: 2, i: 0, j: 3 }, { t: 3, reset: true }, { t: 4, i: 0, j: 1 }, { t: 5, i: 0, j: 0 }], [0], 4);
+  console.assert(q.length === 3 && q[2].lap === 1 && q[2].k === 1, 'progress: a cleared lap starts a new one even when mini-sector 0 is missed');
   console.assert(p.length === 20 && p[4].lap === 1 && p[4].k === 0, 'progress');
   console.assert(calibrate({ a: p }, 4, [0.25, 0.5, 0.75, 1]).every((f, k) => Math.abs(f - [0.1, 0.4, 0.6, 1][k]) < 1e-3), 'calibrate');
 }
